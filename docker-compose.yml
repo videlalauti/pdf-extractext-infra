@@ -1,0 +1,104 @@
+services:
+  validation-service:
+    build: ../pdf-extractext-validation
+    container_name: validation-service
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.validation.rule=Host(`validation.pdf.localhost`)"
+      - "traefik.http.routers.validation.entrypoints=web"
+      - "traefik.http.services.validation.loadbalancer.server.port=8000"
+    networks:
+      - mired
+
+  extraction-service:
+    build: ../pdf-extractext-extraction
+    container_name: extraction-service
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    environment:
+      - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.extraction.rule=Host(`extraction.pdf.localhost`)"
+      - "traefik.http.routers.extraction.entrypoints=web"
+      - "traefik.http.services.extraction.loadbalancer.server.port=8000"
+    networks:
+      - mired
+
+  persistence-service:
+    build: ../pdf-extractext-persistence
+    container_name: persistence-service
+    restart: unless-stopped
+    ports:
+      - "8003:8000"
+    environment:
+      - MONGODB_HOST=mongo
+      - MONGODB_PORT=27017
+      - MONGODB_ROOT_USERNAME=${MONGO_USER:-admin}
+      - MONGODB_ROOT_PASSWORD=${MONGO_PASS:-changeme}
+      - MONGODB_DATABASE_NAME=pdf_extractext
+      - MONGODB_AUTH_SOURCE=admin
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.persistence.rule=Host(`persistence.pdf.localhost`)"
+      - "traefik.http.routers.persistence.entrypoints=web"
+      - "traefik.http.services.persistence.loadbalancer.server.port=8000"
+    networks:
+      - mired
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  summary-service:
+    build: ../pdf-extractext-summary
+    container_name: summary-service
+    restart: unless-stopped
+    ports:
+      - "8004:8000"
+    environment:
+      - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
+      - OLLAMA_URL=http://ollama:11434
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.summary.rule=Host(`summary.pdf.localhost`)"
+      - "traefik.http.routers.summary.entrypoints=web"
+      - "traefik.http.services.summary.loadbalancer.server.port=8000"
+    networks:
+      - mired
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - mired
+
+  mongo:
+    image: mongo:7.0
+    container_name: mongo
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASS:-changeme}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - mired
+
+volumes:
+  ollama-data:
+  mongo-data:
+
+networks:
+  mired:
+    external: true
