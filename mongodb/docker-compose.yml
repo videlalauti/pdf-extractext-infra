@@ -1,0 +1,24 @@
+services:
+  mongo:
+    image: mongo:7-jammy
+    restart: always
+    ports:
+      - 27017:27017
+    networks:
+      - mired
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${ROOT_USERNAME:-admin}
+      - MONGO_INITDB_ROOT_PASSWORD=${ROOT_PASSWORD:-changeme}
+    command: --wiredTigerCacheSizeGB 0.5
+    volumes:
+      - ./data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+    mired:
+        external: true
