@@ -1,3 +1,7 @@
+include:
+  - traefik/docker-compose.yml
+  - mongodb/docker-compose.yml
+
 services:
   validation-service:
     build: ../pdf-extractext-validation
@@ -78,20 +82,6 @@ services:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
-    networks:
-      - mired
-
-  mongo:
-    image: mongo:7.0
-    container_name: mongo
-    restart: unless-stopped
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER:-admin}
-      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASS:-changeme}
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo-data:/data/db
     networks:
       - mired
 
