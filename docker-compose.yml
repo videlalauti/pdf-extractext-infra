@@ -78,6 +78,8 @@ services:
     restart: unless-stopped
     ports:
       - "11434:11434"
+    environment:
+      - OLLAMA_CONTEXT_LENGTH=32768
     volumes:
       - ollama-data:/root/.ollama
     networks:
