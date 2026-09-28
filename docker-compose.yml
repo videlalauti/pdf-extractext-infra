@@ -2,6 +2,12 @@ include:
   - traefik/docker-compose.yml
   - mongodb/docker-compose.yml
 
+x-traefik-labels: &traefik-labels
+  traefik.enable: "true"
+  traefik.http.routers..rule: "Host(`change-me.pdf.localhost`)"
+  traefik.http.routers..entrypoints: web
+  traefik.http.services..loadbalancer.server.port: "8000"
+
 services:
   validation-service:
     build: ../pdf-extractext-validation
@@ -10,10 +16,8 @@ services:
     ports:
       - "8001:8000"
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.validation.rule=Host(`validation.pdf.localhost`)"
-      - "traefik.http.routers.validation.entrypoints=web"
-      - "traefik.http.services.validation.loadbalancer.server.port=8000"
+      <<: *traefik-labels
+      traefik.http.routers..rule: "Host(`validation.pdf.localhost`)"
     networks:
       - mired
 
@@ -26,10 +30,8 @@ services:
     environment:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.extraction.rule=Host(`extraction.pdf.localhost`)"
-      - "traefik.http.routers.extraction.entrypoints=web"
-      - "traefik.http.services.extraction.loadbalancer.server.port=8000"
+      <<: *traefik-labels
+      traefik.http.routers..rule: "Host(`extraction.pdf.localhost`)"
     networks:
       - mired
 
@@ -47,10 +49,8 @@ services:
       - MONGODB_DATABASE_NAME=pdf_extractext
       - MONGODB_AUTH_SOURCE=admin
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.persistence.rule=Host(`persistence.pdf.localhost`)"
-      - "traefik.http.routers.persistence.entrypoints=web"
-      - "traefik.http.services.persistence.loadbalancer.server.port=8000"
+      <<: *traefik-labels
+      traefik.http.routers..rule: "Host(`persistence.pdf.localhost`)"
     networks:
       - mired
     depends_on:
@@ -67,10 +67,8 @@ services:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
       - OLLAMA_URL=http://ollama:11434
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.summary.rule=Host(`summary.pdf.localhost`)"
-      - "traefik.http.routers.summary.entrypoints=web"
-      - "traefik.http.services.summary.loadbalancer.server.port=8000"
+      <<: *traefik-labels
+      traefik.http.routers..rule: "Host(`summary.pdf.localhost`)"
     networks:
       - mired
 
