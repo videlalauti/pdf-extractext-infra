@@ -1,0 +1,4 @@
+# MongoDB
+mongodb/data/
+mongodb/.env
+!mongodb/.env-example
