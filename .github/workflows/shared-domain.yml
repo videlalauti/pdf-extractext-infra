@@ -1,0 +1,22 @@
+name: shared-domain
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check-shared-domain:
+    name: Verificar identidad de shared/domain
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar pdf-extractext-validation
+        run: git clone --depth 1 https://github.com/${{ github.repository_owner }}/pdf-extractext-validation.git validation
+
+      - name: Clonar pdf-extractext-extraction
+        run: git clone --depth 1 https://github.com/${{ github.repository_owner }}/pdf-extractext-extraction.git extraction
+
+      - name: Comparar shared/domain
+        run: diff -r -q validation/shared/domain extraction/shared/domain
