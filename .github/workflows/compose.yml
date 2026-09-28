@@ -1,0 +1,22 @@
+name: compose
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-compose:
+    name: Validar docker compose
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Mostrar version de Docker Compose
+        run: docker compose version
+
+      - name: Validar docker-compose.yml
+        run: docker compose -f docker-compose.yml config --quiet
