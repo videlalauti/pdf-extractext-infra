@@ -2,10 +2,11 @@ include:
   - traefik/docker-compose.yml
   - mongodb/docker-compose.yml
 
+# Traefik exige que los labels de router y service lleven nombre: `..entrypoints`
+# sin nada en el medio se rechaza con "invalid element" y el provider no crea
+# ningun router. El anchor queda solo para lo que si es comun.
 x-traefik-labels: &traefik-labels
   traefik.enable: "true"
-  traefik.http.routers..entrypoints: web
-  traefik.http.services..loadbalancer.server.port: "8000"
 
 services:
   validation-service:
@@ -16,7 +17,9 @@ services:
       - "8001:8000"
     labels:
       <<: *traefik-labels
-      traefik.http.routers..rule: "Host(`validation.pdf.localhost`)"
+      traefik.http.routers.validation.rule: "Host(`validation.pdf.localhost`)"
+      traefik.http.routers.validation.entrypoints: web
+      traefik.http.services.validation.loadbalancer.server.port: "8000"
     networks:
       - mired
 
@@ -30,7 +33,9 @@ services:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
     labels:
       <<: *traefik-labels
-      traefik.http.routers..rule: "Host(`extraction.pdf.localhost`)"
+      traefik.http.routers.extraction.rule: "Host(`extraction.pdf.localhost`)"
+      traefik.http.routers.extraction.entrypoints: web
+      traefik.http.services.extraction.loadbalancer.server.port: "8000"
     networks:
       - mired
 
@@ -51,7 +56,9 @@ services:
       - MONGODB_AUTH_SOURCE=admin
     labels:
       <<: *traefik-labels
-      traefik.http.routers..rule: "Host(`persistence.pdf.localhost`)"
+      traefik.http.routers.persistence.rule: "Host(`persistence.pdf.localhost`)"
+      traefik.http.routers.persistence.entrypoints: web
+      traefik.http.services.persistence.loadbalancer.server.port: "8000"
     networks:
       - mired
     depends_on:
@@ -69,7 +76,9 @@ services:
       - OLLAMA_URL=http://ollama:11434
     labels:
       <<: *traefik-labels
-      traefik.http.routers..rule: "Host(`summary.pdf.localhost`)"
+      traefik.http.routers.summary.rule: "Host(`summary.pdf.localhost`)"
+      traefik.http.routers.summary.entrypoints: web
+      traefik.http.services.summary.loadbalancer.server.port: "8000"
     networks:
       - mired
 

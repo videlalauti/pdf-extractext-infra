@@ -80,9 +80,20 @@ function New-MultipartBody {
 
 function Invoke-Docker {
     param([string[]]$DockerArgs)
-    & docker @DockerArgs
-    if ($LASTEXITCODE -ne 0) {
-        Fail "Fallo: docker $($DockerArgs -join ' ') (exit $LASTEXITCODE)"
+    # docker escribe el progreso de compose en stderr. Con ErrorActionPreference
+    # "Stop" PowerShell lo convierte en NativeCommandError y aborta el script
+    # aunque el comando haya salido con 0. El exito se judgea por LASTEXITCODE.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & docker @DockerArgs 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($exitCode -ne 0) {
+        Fail "Fallo: docker $($DockerArgs -join ' ') (exit $exitCode)"
     }
 }
 
