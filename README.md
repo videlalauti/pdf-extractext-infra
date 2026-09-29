@@ -97,6 +97,13 @@ Levanta el stack, espera el health de los 4 servicios y recorre el flujo complet
 con `scripts/test.pdf`: valida, extrae, verifica el documento persistido por id
 y por checksum, y genera el resumen. Sale con código 0 si todo pasó.
 
+Al terminar **baja el stack**, haya pasado o fallado: si algo falla, vuelca los
+últimos logs de los contenedores antes de limpiar. Para quedarte con el stack
+prendido, levantalo a mano con `docker compose up -d` y usá el script solo
+como verificación en un entorno desechable.
+
+Es el mismo test que corre el workflow `smoke.yml` en cada push a `main`.
+
 ## Comandos útiles
 
 ```bash
@@ -106,18 +113,44 @@ docker compose down
 docker compose down -v         # borra también el volumen de ollama
 ```
 
+## Redes
+
+Dos redes, con propósitos distintos:
+
+- **`mired`** (externa, hay que crearla): transporte entre servicios y Traefik.
+- **`mongo_net_interna`** (la crea Compose, `internal: true`): los datos. No tiene
+  salida a internet y **mongo no está en `mired`**, así que nada alcanzable desde
+  la red de servicios puede tocar la base. `persistence-service` es el único
+  puente entre las dos.
+
+Para entrar a mongo hay que hacerlo desde un contenedor que esté en la red de
+datos: `docker compose exec persistence-service ...`, o
+`docker compose run --rm --network pdf-extractext-infra_mongo_net_interna mongo mongosh`.
+
+## Recursos y logs
+
+Cada servicio tiene `deploy.resources.limits` de memoria y CPU, para que un
+servicio que se coma la RAM no tumbe al resto. Ollama se lleva 6G porque cargar
+un modelo en RAM son gigas; el resto va entre 256M y 2G.
+
+Los logs usan el driver `json-file` con rotación de 10 MB × 3 por servicio (ancla
+`x-logging` en los tres compose). Traefik además tiene `accessLog` en JSON, con
+`RequestHost`, `RequestPath`, status y duración por petición.
+
 ## Estructura
 
 ```
 docker-compose.yml            # los 4 servicios + ollama; incluye traefik/ y mongodb/
-traefik/docker-compose.yml    # edge proxy (80/443)
-traefik/config/               # configuración estática y dashboard
+traefik/docker-compose.yml    # edge proxy (80/443), pineado por digest
+traefik/config/               # configuración estática, access log y dashboard
 traefik/certs/                # GITIGNORED: se regenera con el script
-mongodb/docker-compose.yml    # mongo, solo red interna
+mongodb/docker-compose.yml    # mongo, solo en la red interna de datos
 mongodb/.env-example          # plantilla de credenciales
 mongodb/data/                 # GITIGNORED: datos de mongo
 scripts/generate_certs.ps1    # regenera el par TLS
 scripts/smoke_test.ps1        # smoke test E2E
+.github/workflows/compose.yml # valida el compose
+.github/workflows/smoke.yml   # corre el smoke E2E en cada push a main
 ```
 
 El dominio compartido entre servicios ya no vive acá: se instala desde
@@ -128,5 +161,8 @@ El dominio compartido entre servicios ya no vive acá: se instala desde
 - `OLLAMA_CONTEXT_LENGTH` se puede sobreescribir por entorno; el default es
   `32768`, pensado para PDFs largos.
 - La red `mired` es externa: hay que crearla antes del primer `up`.
+- Los healthcheck de `/health` están en el compose, no en el Dockerfile de cada
+  servicio. Son provisorios: hacen falta para que `condition: service_healthy`
+  funcione, y se pueden borrar cuando cada servicio traiga el suyo.
 - La llave TLS que estuvo commiteada en el historial fue purgada; si clonaste
   este repo antes, borrá el directorio local y cloná de nuevo.
