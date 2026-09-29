@@ -23,3 +23,10 @@ tls:
 
 log:
   level: INFO
+
+# Access log: sin esto no hay forma de saber que pidio cada cliente ni cuanto
+# tardo. Se escribe a stdout y lo rota el driver json-file del compose.
+# Sin filtros a proposito: filtrar por status deja fuera el trafico que si
+# importa (los 200 de la API).
+accessLog:
+  format: json

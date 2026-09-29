@@ -1,15 +1,31 @@
+# Los anchors de YAML no cruzan archivos: esta ancla es la copia local de la
+# que vive en el compose raiz.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
     mongo:
         image: mongo:7.0.43-jammy
         container_name: mongo
-        restart: always
+        restart: unless-stopped
+        logging: *logging
+        deploy:
+            resources:
+                limits:
+                    cpus: "1.5"
+                    memory: 2G
         # Puerto de datos solo en la red interna: los servicios le hablan por
         # `mongo:27017`. Publicarlo en el host salteaba el perimetro de Traefik.
         # Para depurar desde el host: docker compose exec mongo mongosh
         expose:
             - "27017"
         networks:
-            - mired
+            # Solo la red de datos. Mongo no queda expuesto a nada que este en
+            # mired: la unica que llega es persistence-service, por el puente.
+            - mongo_net_interna
         # Mismas variables que persistence-service: una sola fuente de verdad.
         env_file:
             - ../.env
@@ -27,5 +43,5 @@ services:
             start_period: 30s
 
 networks:
-    mired:
-        external: true
+    mongo_net_interna:
+        internal: true

@@ -2,6 +2,22 @@ include:
   - traefik/docker-compose.yml
   - mongodb/docker-compose.yml
 
+# Los anchors de YAML no cruzan archivos: cada compose (este, mongodb/ y
+# traefik/) define su propia copia de esta ancla. Por eso el bloque se repite
+# en vez de vivir en un include compartido.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Bulkhead: que un servicio se coma la RAM no debe tumbar al resto. Los limits
+# (no las reservations) son los que Docker Compose aplica tambien fuera de swarm.
+x-recursos: &recursos-app
+  limits:
+    cpus: "1.0"
+    memory: 512M
+
 # Traefik exige que los labels de router y service lleven nombre: `..entrypoints`
 # sin nada en el medio se rechaza con "invalid element" y el provider no crea
 # ningun router. El anchor queda solo para lo que si es comun.
@@ -13,8 +29,19 @@ services:
     build: ../pdf-extractext-validation
     container_name: validation-service
     restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources: *recursos-app
     ports:
       - "8001:8000"
+    # Provisional: el HEALTHCHECK definitivo va en el Dockerfile (tarea VA).
+    # Sin esto no se puede usar condition: service_healthy como dependencia.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     labels:
       <<: *traefik-labels
       traefik.http.routers.validation.rule: "Host(`validation.pdf.localhost`)"
@@ -27,10 +54,19 @@ services:
     build: ../pdf-extractext-extraction
     container_name: extraction-service
     restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources: *recursos-app
     ports:
       - "8002:8000"
     environment:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     labels:
       <<: *traefik-labels
       traefik.http.routers.extraction.rule: "Host(`extraction.pdf.localhost`)"
@@ -38,11 +74,19 @@ services:
       traefik.http.services.extraction.loadbalancer.server.port: "8000"
     networks:
       - mired
+    # Sin esto extraction arranca antes de que persistence escuche y falla el
+    # primer POST con connection refused.
+    depends_on:
+      persistence-service:
+        condition: service_healthy
 
   persistence-service:
     build: ../pdf-extractext-persistence
     container_name: persistence-service
     restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources: *recursos-app
     ports:
       - "8003:8000"
     # Las credenciales llegan por .env con los mismos nombres que usa mongo:
@@ -54,6 +98,12 @@ services:
       - MONGODB_PORT=27017
       - MONGODB_DATABASE_NAME=pdf_extractext
       - MONGODB_AUTH_SOURCE=admin
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     labels:
       <<: *traefik-labels
       traefik.http.routers.persistence.rule: "Host(`persistence.pdf.localhost`)"
@@ -61,6 +111,8 @@ services:
       traefik.http.services.persistence.loadbalancer.server.port: "8000"
     networks:
       - mired
+      # Puente con la red de datos. Es el unico servicio en las dos redes.
+      - mongo_net_interna
     depends_on:
       mongo:
         condition: service_healthy
@@ -69,11 +121,23 @@ services:
     build: ../pdf-extractext-summary
     container_name: summary-service
     restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1G
     ports:
       - "8004:8000"
     environment:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
       - OLLAMA_URL=http://ollama:11434
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     labels:
       <<: *traefik-labels
       traefik.http.routers.summary.rule: "Host(`summary.pdf.localhost`)"
@@ -81,11 +145,25 @@ services:
       traefik.http.services.summary.loadbalancer.server.port: "8000"
     networks:
       - mired
+    # ollama tarda en levantar el server; esperar a healthy evita que el primer
+    # POST /summary muera con connection refused.
+    depends_on:
+      persistence-service:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
 
   ollama:
     image: ollama/ollama:0.34.4
     container_name: ollama
     restart: unless-stopped
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          cpus: "3.0"
+          # Cargar un modelo en RAM son GB: es el que mas margen necesita.
+          memory: 6G
     # Puerto de datos solo en la red interna; el host no lo necesita.
     # Para depurar: docker compose exec ollama ollama list
     expose:
@@ -95,6 +173,14 @@ services:
       - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-32768}
     volumes:
       - ollama-data:/root/.ollama
+    # La imagen ollama/ollama no trae curl ni wget, asi que el healthcheck usa
+    # el propio binario. `ollama list` responde cuando el server ya escucha.
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     networks:
       - mired
 
@@ -104,3 +190,7 @@ volumes:
 networks:
   mired:
     external: true
+  # Red de datos sin salida a internet: mongo no es alcanzable desde nada que
+  # este en mired, solo persistence la bridgea.
+  mongo_net_interna:
+    internal: true
