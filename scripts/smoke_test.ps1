@@ -31,8 +31,9 @@ function Write-Step {
 
 function Fail {
     param([string]$Message)
-    Write-Host ("[ERROR] " + $Message) -ForegroundColor Red
-    exit 1
+    # throw y no exit: asi el try/finally de abajo siempre corre la limpieza
+    # (bajar el stack) en vez de dejar el runner con contenedores prendidos.
+    throw $Message
 }
 
 function Invoke-Api {
@@ -53,7 +54,14 @@ function Invoke-Api {
         $params.Body = $BytesBody
         $params.ContentType = $ContentType
     }
-    $response = Invoke-WebRequest @params
+    try {
+        $response = Invoke-WebRequest @params
+    }
+    catch {
+        # Se re-lanza con el endpoint en el mensaje: sin esto el catch global
+        # muestra el error crudo de WinHTTP y no se sabe que llamada fallo.
+        throw "$Method $Uri fallo: $($_.Exception.Message)"
+    }
     if ($response.Content) {
         return $response.Content | ConvertFrom-Json
     }
@@ -123,88 +131,112 @@ if (-not (Test-Path -LiteralPath $pdfPath)) {
     Fail "No se encontro el PDF de prueba: $pdfPath"
 }
 
-Write-Step "Verificando red externa '$ExternalNetwork'"
-& docker network inspect $ExternalNetwork *> $null
-if ($LASTEXITCODE -ne 0) {
-    Write-Step "Red '$ExternalNetwork' no existe; creandola"
-    Invoke-Docker -DockerArgs @("network", "create", $ExternalNetwork)
-}
+# Si el smoke falla a mitad de camino no puede quedar el stack prendido: en CI
+# el runner se descarta, pero en local te deja puertos ocupados y volumenes
+# corryptos. Todo el cuerpo va en try y la limpieza en finally.
+$exitCode = 0
+$networkCreated = $false
+$stackStarted = $false
 
-Write-Step "Levantando el stack con $composePath"
-Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "up", "-d")
-
-Wait-ServiceHealth -Name "validation-service" -BaseUrl $ValidationUrl
-Wait-ServiceHealth -Name "extraction-service" -BaseUrl $ExtractionUrl
-Wait-ServiceHealth -Name "persistence-service" -BaseUrl $PersistenceUrl
-Wait-ServiceHealth -Name "summary-service" -BaseUrl $SummaryUrl
-
-$pdfBytes = [System.IO.File]::ReadAllBytes($pdfPath)
-$pdfName = Split-Path -Leaf $pdfPath
-
-Write-Step "Enviando PDF a /validate"
 try {
+    Write-Step "Verificando red externa '$ExternalNetwork'"
+    & docker network inspect $ExternalNetwork *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Step "Red '$ExternalNetwork' no existe; creandola"
+        Invoke-Docker -DockerArgs @("network", "create", $ExternalNetwork)
+        $networkCreated = $true
+    }
+
+    Write-Step "Levantando el stack con $composePath"
+    Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "up", "-d")
+    $stackStarted = $true
+
+    Wait-ServiceHealth -Name "validation-service" -BaseUrl $ValidationUrl
+    Wait-ServiceHealth -Name "extraction-service" -BaseUrl $ExtractionUrl
+    Wait-ServiceHealth -Name "persistence-service" -BaseUrl $PersistenceUrl
+    Wait-ServiceHealth -Name "summary-service" -BaseUrl $SummaryUrl
+
+    $pdfBytes = [System.IO.File]::ReadAllBytes($pdfPath)
+    $pdfName = Split-Path -Leaf $pdfPath
+
+    Write-Step "Enviando PDF a /validate"
     $upload = New-MultipartBody -FileName $pdfName -FileBytes $pdfBytes
     $validation = Invoke-Api -Method POST -Uri "$ValidationUrl/validate" `
         -BytesBody $upload.Body -ContentType ("multipart/form-data; boundary=" + $upload.Boundary)
-}
-catch {
-    Fail "Fallo POST $ValidationUrl/validate: $($_.Exception.Message)"
-}
-if ($validation.valid -ne $true) {
-    Fail "/validate reporto PDF invalido: $($validation.error)"
-}
-Write-Step "OK  /validate -> valid=$($validation.valid)"
+    if ($validation.valid -ne $true) {
+        Fail "/validate reporto PDF invalido: $($validation.error)"
+    }
+    Write-Step "OK  /validate -> valid=$($validation.valid)"
 
-Write-Step "Enviando PDF a /extract"
-try {
+    Write-Step "Enviando PDF a /extract"
     $upload = New-MultipartBody -FileName $pdfName -FileBytes $pdfBytes
     $extraction = Invoke-Api -Method POST -Uri "$ExtractionUrl/extract" `
         -BytesBody $upload.Body -ContentType ("multipart/form-data; boundary=" + $upload.Boundary) `
         -TimeoutSec 60
-}
-catch {
-    Fail "Fallo POST $ExtractionUrl/extract: $($_.Exception.Message)"
-}
-if ([string]::IsNullOrWhiteSpace($extraction.text)) {
-    Fail "/extract devolvio texto vacio"
-}
-if ([string]::IsNullOrWhiteSpace($extraction.document_id)) {
-    Fail "/extract no devolvio document_id"
-}
-Write-Step "OK  /extract -> document_id=$($extraction.document_id) text_len=$($extraction.text.Length)"
+    if ([string]::IsNullOrWhiteSpace($extraction.text)) {
+        Fail "/extract devolvio texto vacio"
+    }
+    if ([string]::IsNullOrWhiteSpace($extraction.document_id)) {
+        Fail "/extract no devolvio document_id"
+    }
+    Write-Step "OK  /extract -> document_id=$($extraction.document_id) text_len=$($extraction.text.Length)"
 
-$documentId = $extraction.document_id
+    $documentId = $extraction.document_id
 
-Write-Step "Verificando documento en /documents/$documentId"
-try {
+    Write-Step "Verificando documento en /documents/$documentId"
     $document = Invoke-Api -Method GET -Uri "$PersistenceUrl/documents/$documentId" -TimeoutSec 30
-}
-catch {
-    Fail "Fallo GET $PersistenceUrl/documents/${documentId}: $($_.Exception.Message)"
-}
-if ($document.content -ne $extraction.text) {
-    Fail "El contenido persistido no coincide con el texto extraido"
-}
-$expectedChecksum = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($document.checksum -ne $expectedChecksum) {
-    Fail "El checksum no coincide (esperado $expectedChecksum, obtenido $($document.checksum))"
-}
-Write-Step "OK  /documents/$documentId -> content y checksum verificados"
+    if ($document.content -ne $extraction.text) {
+        Fail "El contenido persistido no coincide con el texto extraido"
+    }
+    $expectedChecksum = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($document.checksum -ne $expectedChecksum) {
+        Fail "El checksum no coincide (esperado $expectedChecksum, obtenido $($document.checksum))"
+    }
+    Write-Step "OK  /documents/$documentId -> content y checksum verificados"
 
-Write-Step "Generando resumen en /summary/$documentId"
-try {
+    Write-Step "Generando resumen en /summary/$documentId"
     $summary = Invoke-Api -Method POST -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 300
+    if ([string]::IsNullOrWhiteSpace($summary.summary)) {
+        Fail "/summary devolvio un resumen vacio"
+    }
+    if ($summary.document_id -ne $documentId) {
+        Fail "/summary devolvio document_id distinto al esperado"
+    }
+    Write-Step "OK  /summary -> document_id=$($summary.document_id) summary_len=$($summary.summary.Length)"
+
+    Write-Step "SMOKE TEST COMPLETO"
 }
 catch {
-    Fail "Fallo POST $SummaryUrl/summary/${documentId}: $($_.Exception.Message)"
+    Write-Host ("[ERROR] " + $_.Exception.Message) -ForegroundColor Red
+    Write-Step "Dejando logs de los contenedores para diagnosticar:"
+    try {
+        Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "logs", "--tail", "15")
+    }
+    catch {
+    }
+    $exitCode = 1
 }
-if ([string]::IsNullOrWhiteSpace($summary.summary)) {
-    Fail "/summary devolvio un resumen vacio"
+finally {
+    if ($stackStarted) {
+        Write-Step "Bajando el stack"
+        try {
+            Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "down", "--remove-orphans")
+        }
+        catch {
+            Write-Host ("[WARN] fallo el down: " + $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+    # Solo se borra la red si la creo este script. Si ya existia, la puede estar
+    # usando otro stack y arrancarle la red de abajo seria un efecto colateral.
+    if ($networkCreated) {
+        Write-Step "Eliminando la red externa '$ExternalNetwork'"
+        try {
+            Invoke-Docker -DockerArgs @("network", "rm", $ExternalNetwork)
+        }
+        catch {
+            Write-Host ("[WARN] no se pudo eliminar la red: " + $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
 }
-if ($summary.document_id -ne $documentId) {
-    Fail "/summary devolvio document_id distinto al esperado"
-}
-Write-Step "OK  /summary -> document_id=$($summary.document_id) summary_len=$($summary.summary.Length)"
 
-Write-Step "SMOKE TEST COMPLETO"
-exit 0
+exit $exitCode

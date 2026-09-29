@@ -1,0 +1,73 @@
+name: smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Smoke E2E del stack
+    runs-on: ubuntu-latest
+    # Construye 4 imagenes, baja mongo y ollama, y corre un modelo contra
+    # ollama. Es lento a proposito: el punto es el arranque en frio completo.
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout de la infra
+        uses: actions/checkout@v4
+
+      # El compose resuelve los contextos de build como ../pdf-extractext-*, es
+      # decir hermanos de este repo. Si no estan, `docker compose up` no falla
+      # por config: falla al no encontrar el Dockerfile.
+      - name: Clonar los repos de servicios
+        run: |
+          set -euo pipefail
+          for repo in validation extraction persistence summary; do
+            git clone --depth 1 \
+              "https://github.com/${{ github.repository_owner }}/pdf-extractext-${repo}.git" \
+              "../pdf-extractext-${repo}"
+          done
+          ls -1 ..
+
+      # El compose exige estas variables (no hay defaults), asi que sin esto el
+      # stack ni siquiera resuelve.
+      - name: Crear .env de credenciales
+        run: |
+          set -euo pipefail
+          pwsh -NoProfile -Command '
+            $pw = [guid]::NewGuid().ToString("N") + "aA1!"
+            @(
+              "MONGODB_ROOT_USERNAME=extractext_ci"
+              "MONGODB_ROOT_PASSWORD=$pw"
+            ) | Set-Content -LiteralPath .env
+          '
+
+      # traefik monta ./certs y el par no esta en git.
+      - name: Generar certificados TLS
+        run: pwsh -NoProfile -File ./scripts/generate_certs.ps1
+
+      - name: Mostrar recursos del runner
+        run: |
+          docker compose version
+          free -h || true
+          nproc
+
+      - name: Correr smoke test E2E
+        run: pwsh -NoProfile -File ./scripts/smoke_test.ps1
+
+      # El script ya baja el stack en su finally. Esto es una red de seguridad:
+      # si el runner se cae a mitad de camino, el job no debe dejar el job
+      # siguiente (o el cleanup del runner) esperando.
+      - name: Asegurar stack abajo
+        if: always()
+        run: |
+          docker compose -f docker-compose.yml down --remove-orphans || true
+          docker network rm mired || true
