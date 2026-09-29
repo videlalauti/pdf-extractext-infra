@@ -4,7 +4,6 @@ include:
 
 x-traefik-labels: &traefik-labels
   traefik.enable: "true"
-  traefik.http.routers..rule: "Host(`change-me.pdf.localhost`)"
   traefik.http.routers..entrypoints: web
   traefik.http.services..loadbalancer.server.port: "8000"
 
@@ -41,11 +40,13 @@ services:
     restart: unless-stopped
     ports:
       - "8003:8000"
+    # Las credenciales llegan por .env con los mismos nombres que usa mongo:
+    # no hay defaults que puedan quedar desincronizados entre si.
+    env_file:
+      - ./.env
     environment:
       - MONGODB_HOST=mongo
       - MONGODB_PORT=27017
-      - MONGODB_ROOT_USERNAME=${MONGO_USER:-admin}
-      - MONGODB_ROOT_PASSWORD=${MONGO_PASS:-changeme}
       - MONGODB_DATABASE_NAME=pdf_extractext
       - MONGODB_AUTH_SOURCE=admin
     labels:
@@ -76,10 +77,13 @@ services:
     image: ollama/ollama:0.34.4
     container_name: ollama
     restart: unless-stopped
-    ports:
-      - "11434:11434"
+    # Puerto de datos solo en la red interna; el host no lo necesita.
+    # Para depurar: docker compose exec ollama ollama list
+    expose:
+      - "11434"
     environment:
-      - OLLAMA_CONTEXT_LENGTH=32768
+      # Configurable por entorno (12-Factor); 32768 es el default para PDFs largos.
+      - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-32768}
     volumes:
       - ollama-data:/root/.ollama
     networks:
@@ -87,7 +91,6 @@ services:
 
 volumes:
   ollama-data:
-  mongo-data:
 
 networks:
   mired:

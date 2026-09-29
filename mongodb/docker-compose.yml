@@ -1,23 +1,30 @@
 services:
-  mongo:
-    image: mongo:7.0.43-jammy
-    restart: always
-    ports:
-      - 27017:27017
-    networks:
-      - mired
-    environment:
-      - MONGO_INITDB_ROOT_USERNAME=${ROOT_USERNAME:-admin}
-      - MONGO_INITDB_ROOT_PASSWORD=${ROOT_PASSWORD:-changeme}
-    command: --wiredTigerCacheSizeGB 0.5
-    volumes:
-      - ./data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+    mongo:
+        image: mongo:7.0.43-jammy
+        container_name: mongo
+        restart: always
+        # Puerto de datos solo en la red interna: los servicios le hablan por
+        # `mongo:27017`. Publicarlo en el host salteaba el perimetro de Traefik.
+        # Para depurar desde el host: docker compose exec mongo mongosh
+        expose:
+            - "27017"
+        networks:
+            - mired
+        # Mismas variables que persistence-service: una sola fuente de verdad.
+        env_file:
+            - ../.env
+        environment:
+            - MONGO_INITDB_ROOT_USERNAME=${MONGODB_ROOT_USERNAME:?falta MONGODB_ROOT_USERNAME en .env de la raiz (copia mongodb/.env-example)}
+            - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_ROOT_PASSWORD:?falta MONGODB_ROOT_PASSWORD en .env de la raiz (copia mongodb/.env-example)}
+        command: --wiredTigerCacheSizeGB 0.5
+        volumes:
+            - ./data:/data/db
+        healthcheck:
+            test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 30s
 
 networks:
     mired:
