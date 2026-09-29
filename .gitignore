@@ -1,4 +1,25 @@
-# MongoDB
-mongodb/data/
-mongodb/.env
+# Secretos: nunca commitear llaves privadas ni .env reales
+traefik/certs/
+*.pem
+*.key
+.env
 !mongodb/.env-example
+!.env-example
+
+# Datos y estado local
+mongodb/data/
+ollama-data/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Editores y SO
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
