@@ -124,6 +124,46 @@ function Wait-ServiceHealth {
     Fail "Timeout esperando health de $Name en $BaseUrl/health (limite $HealthTimeoutSeconds s)"
 }
 
+function Invoke-DockerCapture {
+    param([string[]]$DockerArgs)
+    # Igual que Invoke-Docker: docker escribe en stderr y con ErrorActionPreference
+    # "Stop" eso abortaria el script. Aqui ademas capturamos la salida para inspeccionarla.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & docker @DockerArgs 2>&1 | ForEach-Object { "$_" }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+    return @{ Output = $output; ExitCode = $exitCode }
+}
+
+function Ensure-OllamaModel {
+    param([string]$Model = $(if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2" }))
+    # En CI el volumen de ollama nace vacio y el primer POST /summary falla con 503
+    # (ollama responde 404 model not found). En local ya suele estar descargado.
+    # Este paso descarga el modelo con el que trabaja el summary-service para que
+    # el E2E sea determinista en frio y caliente.
+    Write-Step "Verificando modelo de Ollama '$Model'"
+    $check = Invoke-DockerCapture -DockerArgs @("exec", "ollama", "ollama", "list")
+    $isPresent = $check.ExitCode -eq 0 -and (($check.Output -join "`n") -match [regex]::Escape($Model))
+    if (-not $isPresent) {
+        Write-Step "Modelo '$Model' no disponible; descargandolo (solo la primera corrida en frio)"
+        $pull = Invoke-DockerCapture -DockerArgs @("exec", "ollama", "ollama", "pull", $Model)
+        $pull.Output | ForEach-Object { Write-Host $_ }
+        if ($pull.ExitCode -ne 0) {
+            Fail "No se pudo descargar el modelo '$Model' (exit $($pull.ExitCode))"
+        }
+        $check = Invoke-DockerCapture -DockerArgs @("exec", "ollama", "ollama", "list")
+        if ($check.ExitCode -ne 0 -or (($check.Output -join "`n") -notmatch [regex]::Escape($Model))) {
+            Fail "El modelo '$Model' no aparece en 'ollama list' tras la descarga"
+        }
+    }
+    Write-Step "OK  modelo de Ollama '$Model' disponible"
+}
+
 if (-not (Test-Path -LiteralPath $composePath)) {
     Fail "No se encontro el archivo compose: $composePath"
 }
@@ -155,6 +195,8 @@ try {
     Wait-ServiceHealth -Name "extraction-service" -BaseUrl $ExtractionUrl
     Wait-ServiceHealth -Name "persistence-service" -BaseUrl $PersistenceUrl
     Wait-ServiceHealth -Name "summary-service" -BaseUrl $SummaryUrl
+
+    Ensure-OllamaModel
 
     $pdfBytes = [System.IO.File]::ReadAllBytes($pdfPath)
     $pdfName = Split-Path -Leaf $pdfPath
