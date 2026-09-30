@@ -41,7 +41,7 @@ try {
             $env:K6_WEB_DASHBOARD_OPEN = "true"
             $env:K6_WEB_DASHBOARD_PERIOD = $Period
         }
-        & $K6 run $fullScript 2>&1 | Tee-Object -FilePath "report.txt" | Out-Host
+        & $K6 run $fullScript 2>&1 | Out-Host
         $exitCode = $LASTEXITCODE
     }
     finally {
@@ -56,27 +56,6 @@ try {
 }
 finally {
     Pop-Location
-}
-
-$resultsPath = Join-Path $scriptDir "results.json"
-if (Test-Path -LiteralPath $resultsPath) {
-    $gzipPath = $resultsPath + ".gz"
-    $inputStream = [System.IO.File]::OpenRead($resultsPath)
-    $outputStream = [System.IO.File]::Create($gzipPath)
-    $gzip = New-Object System.IO.Compression.GZipStream($outputStream, [System.IO.Compression.CompressionMode]::Compress)
-    try {
-        $inputStream.CopyTo($gzip)
-    }
-    finally {
-        $gzip.Dispose()
-        $outputStream.Dispose()
-        $inputStream.Dispose()
-    }
-    Move-Item -Force $resultsPath (Join-Path $scriptDir "results.json.raw") -ErrorAction SilentlyContinue
-    Write-Host "[LOAD TEST] Resultados en $gzipPath y reporte resumido en reporte.txt"
-}
-else {
-    Write-Host "[LOAD TEST] No se encontro results.json (k6 no lo genero)"
 }
 
 exit $exitCode

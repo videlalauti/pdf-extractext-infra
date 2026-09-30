@@ -11,6 +11,13 @@ mongodb/data/
 ollama-data/
 *.log
 
+# Byproducts de k6 (load test)
+load-test/report.txt
+load-test/results.json
+load-test/results.json.raw
+load-test/reporte.txt
+load-test/results.json.gz
+
 # Python
 __pycache__/
 *.py[cod]
