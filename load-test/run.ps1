@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$K6 = "C:\Program Files\k6\k6.exe",
-    [string]$ScriptPath = "script.js"
+    [string]$ScriptPath = "script.js",
+    [switch]$Dashboard
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,18 +20,29 @@ if (-not (Test-Path -LiteralPath $fullScript)) {
 
 Write-Host "Corriendo el load test E2E con k6..."
 Write-Host "Requiere el stack levantado: docker compose -f docker-compose.yml up -d"
+if ($Dashboard) {
+    Write-Host "Dashboard web habilitado: abre http://127.0.0.1:5665 (k6 espera a que cierres la pestana para terminar)"
+}
 Push-Location $scriptDir
 try {
     # k6 escribe el resumen y console.log en stderr; con ErrorActionPreference
     # "Stop" eso se convierte en NativeCommandError y mata el proceso. Igual
     # que en el smoke, se corre con Stop temporal para juzgar por LASTEXITCODE.
     $previous = $ErrorActionPreference
+    $previousDashboard = $env:K6_WEB_DASHBOARD
+    $previousDashboardOpen = $env:K6_WEB_DASHBOARD_OPEN
     $ErrorActionPreference = "Continue"
     try {
+        if ($Dashboard) {
+            $env:K6_WEB_DASHBOARD = "true"
+            $env:K6_WEB_DASHBOARD_OPEN = "true"
+        }
         & $K6 run $fullScript 2>&1 | Tee-Object -FilePath "report.txt" | Out-Host
         $exitCode = $LASTEXITCODE
     }
     finally {
+        $env:K6_WEB_DASHBOARD = $previousDashboard
+        $env:K6_WEB_DASHBOARD_OPEN = $previousDashboardOpen
         $ErrorActionPreference = $previous
     }
     if ($exitCode -ne 0) {

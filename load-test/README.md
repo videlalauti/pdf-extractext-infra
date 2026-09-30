@@ -37,6 +37,38 @@ $env:SUMMARY_URL = "http://localhost:8004"
 ./load-test/run.ps1
 ```
 
+### Dashboard web en vivo
+
+k6 trae un dashboard web integrado para ver el run en tiempo real. Para
+activarlo, pasar el switch `-Dashboard` al script:
+
+```powershell
+./load-test/run.ps1 -Dashboard
+```
+
+Abre el navegador automáticamente en `http://127.0.0.1:5665`; equivale a:
+
+```powershell
+$env:K6_WEB_DASHBOARD = "true"
+$env:K6_WEB_DASHBOARD_OPEN = "true"   # opcional: auto-abrir el navegador
+& "C:\Program Files\k6\k6.exe" run load-test/script.js
+```
+
+> Nota: **mientras haya una pestaña del dashboard abierta, k6 no termina** el
+> proceso (te deja descargar el reporte HTML desde el botón *Report*). Cerrá la
+> pestaña cuando termines de mirarlo; el proceso sale solo.
+>
+> En entornos no interactivos (CI) el dashboard no se debe servir: se puede
+> exportar el reporte HTML sin levantar el servidor y terminar enseguida con
+> `K6_WEB_DASHBOARD_PORT=-1`:
+>
+> ```powershell
+> $env:K6_WEB_DASHBOARD = "true"
+> $env:K6_WEB_DASHBOARD_PORT = "-1"
+> $env:K6_WEB_DASHBOARD_EXPORT = "dashboard-report.html"
+> & "C:\Program Files\k6\k6.exe" run load-test/script.js
+> ```
+
 ## Perfil de carga
 
 `script.js` usa un solo escenario `per-vu-iterations` con 1 VU y 3 iteraciones.
