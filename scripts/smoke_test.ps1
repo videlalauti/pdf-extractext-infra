@@ -176,12 +176,12 @@ try {
     if ([string]::IsNullOrWhiteSpace($extraction.text)) {
         Fail "/extract devolvio texto vacio"
     }
-    if ([string]::IsNullOrWhiteSpace($extraction.document_id)) {
-        Fail "/extract no devolvio document_id"
+    if ([string]::IsNullOrWhiteSpace($extraction.id)) {
+        Fail "/extract no devolvio document id"
     }
-    Write-Step "OK  /extract -> document_id=$($extraction.document_id) text_len=$($extraction.text.Length)"
+    Write-Step "OK  /extract -> id=$($extraction.id) text_len=$($extraction.text.Length)"
 
-    $documentId = $extraction.document_id
+    $documentId = $extraction.id
 
     Write-Step "Verificando documento en /documents/$documentId"
     $document = Invoke-Api -Method GET -Uri "$PersistenceUrl/documents/$documentId" -TimeoutSec 30

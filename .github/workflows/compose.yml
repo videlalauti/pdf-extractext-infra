@@ -18,5 +18,12 @@ jobs:
       - name: Mostrar version de Docker Compose
         run: docker compose version
 
+      # El compose interpola credenciales con `:?` (no tiene defaults): sin .env
+      # el check estatico falla antes de validar nada. Credenciales de prueba: el
+      # job solo corre `config --quiet`, nunca levanta los servicios.
+      - name: Crear .env de credenciales de prueba
+        run: |
+          printf 'MONGODB_ROOT_USERNAME=validate_ci\nMONGODB_ROOT_PASSWORD=ArturiaPendragon1260!\n' > .env
+
       - name: Validar docker-compose.yml
         run: docker compose -f docker-compose.yml config --quiet

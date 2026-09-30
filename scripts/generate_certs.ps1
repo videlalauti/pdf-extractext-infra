@@ -55,7 +55,10 @@ $san = ($domainList | ForEach-Object { "DNS:$_" }) -join ","
 Write-Step "Generando par TLS autofirmado para $san (valido $Days dias)"
 Write-Step "CN/Certificate/key en $certsPath (gitignored: nunca se commitean)"
 
-$configPath = Join-Path $env:TEMP ("extractext-openssl-" + [guid]::NewGuid().ToString("N") + ".cnf")
+# $env:TEMP solo existe en Windows; GetTempPath es multiplataforma (en CI corre
+# pwsh sobre Linux). Sin esto, Join-Path recibe un Path nulo y aborta.
+$tempDir = [System.IO.Path]::GetTempPath()
+$configPath = Join-Path $tempDir ("extractext-openssl-" + [guid]::NewGuid().ToString("N") + ".cnf")
 try {
     @"
 [req]
