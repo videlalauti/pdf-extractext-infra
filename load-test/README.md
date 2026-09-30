@@ -58,6 +58,22 @@ $env:K6_WEB_DASHBOARD_OPEN = "true"   # opcional: auto-abrir el navegador
 > proceso (te deja descargar el reporte HTML desde el botón *Report*). Cerrá la
 > pestaña cuando termines de mirarlo; el proceso sale solo.
 >
+> **La pestaña debe quedarse abierta durante todo el run** (sin recargarla):
+> el dashboard se alimenta por un stream en vivo (`/events`) y si lo abrís
+> después de que el run terminó, la página queda en blanco.
+>
+> **Período de agregación:** los gráficos solo se dibujan si el run dura más de
+> `3 × K6_WEB_DASHBOARD_PERIOD` (con el default de 10 s hace falta >30 s de
+> datos). Nuestro run bordea ese límite, por eso `run.ps1` usa período de 1 s
+> (`-Period 1s`) y queda margen de sobra. Si sale por consola directa, setear:
+>
+> ```powershell
+> $env:K6_WEB_DASHBOARD = "true"
+> $env:K6_WEB_DASHBOARD_PERIOD = "1s"
+> $env:K6_WEB_DASHBOARD_OPEN = "true"
+> & "C:\Program Files\k6\k6.exe" run load-test/script.js
+> ```
+>
 > En entornos no interactivos (CI) el dashboard no se debe servir: se puede
 > exportar el reporte HTML sin levantar el servidor y terminar enseguida con
 > `K6_WEB_DASHBOARD_PORT=-1`:
