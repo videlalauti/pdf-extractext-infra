@@ -18,6 +18,9 @@ load-test/results.json.raw
 load-test/reporte.txt
 load-test/results.json.gz
 
+# Corpus local de PDFs de prueba (no se commitea)
+load-test/pdfs/
+
 # Python
 __pycache__/
 *.py[cod]

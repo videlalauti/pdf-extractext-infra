@@ -6,8 +6,9 @@ const EXTRACTION_URL = __ENV.EXTRACTION_URL || "http://localhost:8002";
 const PERSISTENCE_URL = __ENV.PERSISTENCE_URL || "http://localhost:8003";
 const SUMMARY_URL = __ENV.SUMMARY_URL || "http://localhost:8004";
 const PDF_PATH = __ENV.PDF_PATH || "../scripts/test.pdf";
-
-const pdf = open(PDF_PATH, "b");
+const pdfs = (__ENV.PDF_FILES || PDF_PATH)
+  .split(",")
+  .map((path) => open(path.trim(), "b"));
 
 export const options = {
   scenarios: {
@@ -29,7 +30,7 @@ export const options = {
   },
 };
 
-function buildPdfPayload(boundary) {
+function buildPdfPayload(boundary, pdf) {
   const header =
     `--${boundary}\r\n` +
     `Content-Disposition: form-data; name="file"; filename="test.pdf"\r\n` +
@@ -56,7 +57,8 @@ function postPdf(url, payload, boundary, tagName, timeout) {
 
 export default function () {
   const boundary = `----k6boundary${__VU}-${__ITER}-${Date.now()}`;
-  const payload = buildPdfPayload(boundary);
+  const pdf = pdfs[__ITER % pdfs.length];
+  const payload = buildPdfPayload(boundary, pdf);
 
   const validation = postPdf(
     `${VALIDATION_URL}/validate`,
