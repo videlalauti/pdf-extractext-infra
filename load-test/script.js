@@ -55,6 +55,27 @@ function postPdf(url, payload, boundary, tagName, timeout) {
   });
 }
 
+function pollSummary(documentId) {
+  // Contrato async: el POST encola (202) y el resultado se consulta con GET
+  // hasta que responde 200. El total puede incluir la inferencia real por CPU
+  // local (~4-5 min en la primera corrida).
+  const deadline = Date.now() + 300000;
+  while (Date.now() < deadline) {
+    sleep(5);
+    const poll = http.get(`${SUMMARY_URL}/summary/${documentId}`, {
+      tags: { name: "summary" },
+      timeout: "10s",
+    });
+    if (poll.status === 200) {
+      return poll;
+    }
+    if (poll.status !== 202 && poll.status !== 409) {
+      return poll;
+    }
+  }
+  return { status: 408, body: null };
+}
+
 export default function () {
   const boundary = `----k6boundary${__VU}-${__ITER}-${Date.now()}`;
   const pdf = pdfs[__ITER % pdfs.length];
@@ -100,12 +121,28 @@ export default function () {
 
     const summary = http.post(`${SUMMARY_URL}/summary/${documentId}`, null, {
       tags: { name: "summary" },
+      // Compatibilidad doble: con el contrato async el POST responde en ms
+      // (202), pero mientras summary sea sincronico la inferencia corre adentro
+      // del POST y puede tardar ~200 s. El techo queda en 300 s para que el
+      // test sirva antes y despues del cambio; el p95 del tag tambien es 300 s.
       timeout: "300s",
     });
-    const summaryBody = summary.status === 200 ? JSON.parse(summary.body) : null;
     check(summary, {
-      "summary genera resumen no vacio del documento":
-        (r) => r.status === 200 && summaryBody?.summary?.length > 0 && summaryBody?.document_id === documentId,
+      "summary encola (202) o responde directo (200)": (r) =>
+        r.status === 202 || r.status === 200,
+    });
+
+    // 200 = contrato sincronico (resultado en la misma respuesta); 202 = el
+    // resultado se busca por GET. Asi el load test sirve antes y despues de
+    // que summary pase a asincrono.
+    let summaryResponse = summary;
+    if (summary.status === 202) {
+      summaryResponse = pollSummary(documentId);
+    }
+    const summaryBody = summaryResponse.status === 200 ? JSON.parse(summaryResponse.body) : null;
+    check(summaryResponse, {
+      "summary completa (200 con texto)": (r) =>
+        r.status === 200 && summaryBody?.summary?.length > 0 && summaryBody?.document_id === documentId,
     });
     sleep(0.5);
   }
