@@ -1,8 +1,9 @@
 include:
   - traefik/docker-compose.yml
   - mongodb/docker-compose.yml
+  - redis/docker-compose.yml
 
-# Los anchors de YAML no cruzan archivos: cada compose (este, mongodb/ y
+# Los anchors de YAML no cruzan archivos: cada compose (este, mongodb/, redis/ y
 # traefik/) define su propia copia de esta ancla. Por eso el bloque se repite
 # en vez de vivir en un include compartido.
 x-logging: &logging
@@ -61,6 +62,8 @@ services:
       - "8002:8000"
     environment:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
+      # Backing service por URL (12-Factor): intercambiable sin tocar codigo.
+      - REDIS_URL=redis://redis:6379
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 10s
@@ -78,6 +81,8 @@ services:
     # primer POST con connection refused.
     depends_on:
       persistence-service:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   persistence-service:
@@ -132,6 +137,9 @@ services:
     environment:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
       - OLLAMA_URL=http://ollama:11434
+      # Backing service por URL (12-Factor): aca vive el estado y el resultado
+      # de los jobs de resumen, asi el servicio se reinicia sin perderlos.
+      - REDIS_URL=redis://redis:6379
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 10s
@@ -151,6 +159,8 @@ services:
       persistence-service:
         condition: service_healthy
       ollama:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   ollama:

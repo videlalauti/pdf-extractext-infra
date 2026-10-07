@@ -1,7 +1,8 @@
 # PDF ExtractExt — Infraestructura
 
 Stack Docker Compose de los 4 microservicios de extracción de PDFs, con Traefik
-como edge, MongoDB para persistencia y Ollama para resúmenes.
+como edge, MongoDB para persistencia, Redis como caché (efímero, sin volumen) y
+Ollama para resúmenes.
 
 ## Requisitos
 
@@ -82,10 +83,10 @@ O directo por puerto, sin pasar por Traefik:
 - http://localhost:8003/health
 - http://localhost:8004/health
 
-> Los puertos de **datos** (Mongo 27017, Ollama 11434) están solo en la red
-> interna de Docker: publicarlos saltearía el perímetro de Traefik. Para
-> inspeccionarlos: `docker compose exec mongo mongosh` o
-> `docker compose exec ollama ollama list`.
+> Los puertos de **datos** (Mongo 27017, Ollama 11434, Redis 6379) están solo en
+> la red interna de Docker: publicarlos saltearía el perímetro de Traefik. Para
+> inspeccionarlos: `docker compose exec mongo mongosh`,
+> `docker compose exec ollama ollama list` o `docker compose exec redis redis-cli ping`.
 
 ## Smoke test
 
@@ -127,11 +128,21 @@ Para entrar a mongo hay que hacerlo desde un contenedor que esté en la red de
 datos: `docker compose exec persistence-service ...`, o
 `docker compose run --rm --network pdf-extractext-infra_mongo_net_interna mongo mongosh`.
 
+**Redis no sigue ese patrón**: está en `mired` (los servicios lo necesitan para
+la caché) pero **sin puerto publicado al host**, igual que mongo. Se llega solo
+por dentro (`redis:6379`) o por `docker compose exec redis redis-cli ping`.
+
 ## Recursos y logs
 
 Cada servicio tiene `deploy.resources.limits` de memoria y CPU, para que un
 servicio que se coma la RAM no tumbe al resto. Ollama se lleva 6G porque cargar
 un modelo en RAM son gigas; el resto va entre 256M y 2G.
+
+Redis acota en dos niveles: el contenedor a **256 MB / 0.5 CPU** (bulkhead, como
+el resto) y adentro `--maxmemory 128mb --maxmemory-policy noeviction`. Es
+**efímero**: no tiene volumen, así que cada `down` lo deja vacío (la caché se
+reconstruye sola; si un dataset no entra en 128 MB, Redis falla explícito en
+los logs en vez de descartar entradas en silencio).
 
 Los logs usan el driver `json-file` con rotación de 10 MB × 3 por servicio (ancla
 `x-logging` en los tres compose). Traefik además tiene `accessLog` en JSON, con
@@ -140,13 +151,14 @@ Los logs usan el driver `json-file` con rotación de 10 MB × 3 por servicio (an
 ## Estructura
 
 ```
-docker-compose.yml            # los 4 servicios + ollama; incluye traefik/ y mongodb/
+docker-compose.yml            # los 4 servicios + ollama; incluye traefik/, mongodb/ y redis/
 traefik/docker-compose.yml    # edge proxy (80/443), pineado por digest
 traefik/config/               # configuración estática, access log y dashboard
 traefik/certs/                # GITIGNORED: se regenera con el script
 mongodb/docker-compose.yml    # mongo, solo en la red interna de datos
 mongodb/.env-example          # plantilla de credenciales
 mongodb/data/                 # GITIGNORED: datos de mongo
+redis/docker-compose.yml      # redis (caché), efimero y sin puerto publicado
 scripts/generate_certs.ps1    # regenera el par TLS
 scripts/smoke_test.ps1        # smoke test E2E
 .github/workflows/compose.yml # valida el compose

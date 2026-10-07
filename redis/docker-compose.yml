@@ -1,0 +1,41 @@
+# Los anchors de YAML no cruzan archivos: esta ancla es la copia local de la
+# que vive en el compose raiz.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+    redis:
+        image: redis:7-alpine
+        container_name: redis
+        restart: unless-stopped
+        logging: *logging
+        deploy:
+            resources:
+                limits:
+                    cpus: "0.5"
+                    memory: 256M
+        # Puerto de datos solo en la red de servicios: los servicios le hablan
+        # por `redis:6379`. Para depurar desde el host:
+        # docker compose exec redis redis-cli ping
+        expose:
+            - "6379"
+        # Cache efimera: sin volumen, se pierde en cada `down` (YAGNI: no hay
+        # nada que persistir). noeviction en vez de una politica LRU para que
+        # un dataset que no entra en 128mb falle explicito y se vea en los
+        # logs, en vez de devolver miss silencioso por descartar entradas.
+        command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 10s
+            timeout: 10s
+            retries: 5
+            start_period: 10s
+        networks:
+            - mired
+
+networks:
+    mired:
+        external: true
