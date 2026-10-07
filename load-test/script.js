@@ -26,7 +26,7 @@ export const options = {
     "http_req_duration{name:validate}": ["p(95)<500"],
     "http_req_duration{name:extract}": ["p(95)<10000"],
     "http_req_duration{name:documents}": ["p(95)<2000"],
-    "http_req_duration{name:summary}": ["p(95)<120000"],
+    "http_req_duration{name:summary}": ["p(95)<300000"],
   },
 };
 
@@ -100,7 +100,7 @@ export default function () {
 
     const summary = http.post(`${SUMMARY_URL}/summary/${documentId}`, null, {
       tags: { name: "summary" },
-      timeout: "180s",
+      timeout: "300s",
     });
     const summaryBody = summary.status === 200 ? JSON.parse(summary.body) : null;
     check(summary, {

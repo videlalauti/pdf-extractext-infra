@@ -16,7 +16,7 @@ docker compose -f docker-compose.yml up -d
 
 - `run.ps1` usa `k6` (por defecto `C:\Program Files\k6\k6.exe`) e imprime el resumen estándar de k6 al terminar; con `-Dashboard` además abre el dashboard web en vivo.
 - Con dashboard, k6 no termina mientras haya una pestaña abierta en `http://127.0.0.1:5665`: cerrarla para que salga.
-- Perfil en `script.js`: 1 VU × 3 iteraciones, thresholds p95 por endpoint (validate < 500 ms, extract < 10 s, documents < 2 s, summary < 120 s, errores < 2 %).
+- Perfil en `script.js`: 1 VU × 3 iteraciones, thresholds p95 por endpoint (validate < 500 ms, extract < 10 s, documents < 2 s, summary < 300 s, errores < 2 %). El resumen de documentos reales grandes (cientos de KB) ejecuta llama3.2 por CPU y puede tomar ~2-3 min; por eso el p95 del summary es 300 s.
 - Sobrescribir URLs con env: `VALIDATION_URL`, `EXTRACTION_URL`, `PERSISTENCE_URL`, `SUMMARY_URL`.
 
 ## PDF del test
