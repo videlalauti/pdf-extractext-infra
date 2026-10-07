@@ -36,7 +36,7 @@ function Fail {
     throw $Message
 }
 
-function Invoke-Api {
+function Invoke-ApiResponse {
     param(
         [string]$Method,
         [string]$Uri,
@@ -58,14 +58,40 @@ function Invoke-Api {
         $response = Invoke-WebRequest @params
     }
     catch {
-        # Se re-lanza con el endpoint en el mensaje: sin esto el catch global
-        # muestra el error crudo de WinHTTP y no se sabe que llamada fallo.
+        # 4xx/5xx se devuelven como status para que el llamador decida (el poll
+        # de /summary tolera "todavia en curso"). El resto (timeout, DNS,
+        # connection refused) se re-lanza con el endpoint en el mensaje: sin
+        # eso el catch global muestra el error crudo de WinHTTP.
+        $statusCode = $null
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+        }
+        if ($statusCode -ge 400) {
+            return @{ StatusCode = $statusCode; Body = $null }
+        }
         throw "$Method $Uri fallo: $($_.Exception.Message)"
     }
+    $body = $null
     if ($response.Content) {
-        return $response.Content | ConvertFrom-Json
+        $body = $response.Content | ConvertFrom-Json
     }
-    return $null
+    return @{ StatusCode = [int]$response.StatusCode; Body = $body }
+}
+
+function Invoke-Api {
+    param(
+        [string]$Method,
+        [string]$Uri,
+        [byte[]]$BytesBody = $null,
+        [string]$ContentType = $null,
+        [int]$TimeoutSec = 60
+    )
+    $result = Invoke-ApiResponse -Method $Method -Uri $Uri -BytesBody $BytesBody `
+        -ContentType $ContentType -TimeoutSec $TimeoutSec
+    if ($result.StatusCode -ge 400) {
+        throw "$Method $Uri respondio $($result.StatusCode)"
+    }
+    return $result.Body
 }
 
 function New-MultipartBody {
@@ -236,8 +262,36 @@ try {
     }
     Write-Step "OK  /documents/$documentId -> content y checksum verificados"
 
-    Write-Step "Generando resumen en /summary/$documentId"
-    $summary = Invoke-Api -Method POST -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 300
+    Write-Step "Pidiendo resumen en /summary/$documentId"
+    $summaryCall = Invoke-ApiResponse -Method POST -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 300
+    $summary = $null
+    if ($summaryCall.StatusCode -eq 200) {
+        # Contrato sincronico: el resultado viene en la misma respuesta.
+        $summary = $summaryCall.Body
+    }
+    elseif ($summaryCall.StatusCode -eq 202) {
+        # Contrato async: el POST solo encola y el resultado se consulta con GET
+        # hasta que responde 200 (la inferencia real por CPU puede tardar ~4 min).
+        Write-Step "Resumen encolado (202); esperando el resultado por GET (max 300 s)"
+        $deadline = (Get-Date).AddSeconds(300)
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            $poll = Invoke-ApiResponse -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
+            if ($poll.StatusCode -eq 200) {
+                $summary = $poll.Body
+                break
+            }
+            if ($poll.StatusCode -ne 202 -and $poll.StatusCode -ne 409) {
+                Fail "/summary (GET) respondio $($poll.StatusCode)"
+            }
+        }
+        if ($null -eq $summary) {
+            Fail "Timeout esperando el resultado del resumen (300 s)"
+        }
+    }
+    else {
+        Fail "/summary (POST) respondio $($summaryCall.StatusCode)"
+    }
     if ([string]::IsNullOrWhiteSpace($summary.summary)) {
         Fail "/summary devolvio un resumen vacio"
     }

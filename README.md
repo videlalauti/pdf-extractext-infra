@@ -96,7 +96,10 @@ O directo por puerto, sin pasar por Traefik:
 
 Levanta el stack, espera el health de los 4 servicios y recorre el flujo completo
 con `scripts/test.pdf`: valida, extrae, verifica el documento persistido por id
-y por checksum, y genera el resumen. Sale con código 0 si todo pasó.
+y por checksum, y genera el resumen. El resumen tolera los dos contratos: si
+`POST /summary` responde `200` usa el resultado directo; si responde `202`
+(encola) hace poll a `GET /summary` cada 5 s hasta el `200` (máx 300 s). Sale
+con código 0 si todo pasó.
 
 Al terminar **baja el stack**, haya pasado o fallado: si algo falla, vuelca los
 últimos logs de los contenedores antes de limpiar. Para quedarte con el stack
