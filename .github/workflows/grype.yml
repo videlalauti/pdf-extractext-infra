@@ -1,0 +1,77 @@
+name: grype
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grype-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Un solo job con matrix (KISS): cada servicio se construye y escanea en
+  # paralelo, sin duplicar la definicion. El artefacto auditado es la imagen
+  # (12-Factor), no el host.
+  scan:
+    name: Grype (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # Un servicio vulnerable no debe ocultar el reporte de los otros.
+      fail-fast: false
+      matrix:
+        service: [validation, extraction, persistence, summary]
+
+    steps:
+      - name: Checkout de la infra
+        uses: actions/checkout@v4
+
+      # Mismo patron que smoke.yml: los contextos de build del compose son
+      # hermanos de este repo, asi que hay que clonarlos al mismo nivel.
+      - name: Clonar los repos de servicios
+        run: |
+          set -euo pipefail
+          for repo in validation extraction persistence summary; do
+            git clone --depth 1 \
+              "https://github.com/${{ github.repository_owner }}/pdf-extractext-${repo}.git" \
+              "../pdf-extractext-${repo}"
+          done
+          ls -1 ..
+
+      - name: Construir imagen de ${{ matrix.service }}
+        run: |
+          docker build \
+            --tag "pdf-extractext-${{ matrix.service }}:ci" \
+            "../pdf-extractext-${{ matrix.service }}"
+
+      # Version fijada: el escaneo no debe cambiar por un release nuevo de
+      # grype. El install.sh del tag instala exactamente esa version.
+      - name: Instalar Grype
+        run: |
+          set -euo pipefail
+          grype_version=v0.120.1
+          curl -sSfL "https://raw.githubusercontent.com/anchore/grype/${grype_version}/install.sh" \
+            | sh -s -- -b "$HOME/.local/bin" "${grype_version}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # critical + high rompen el build (return code 2); medium y low solo
+      # quedan en el reporte. El JSON se escribe antes del exit, por eso el
+      # artifact se sube con if: always().
+      - name: Escanear imagen con Grype
+        run: |
+          set -euo pipefail
+          grype "pdf-extractext-${{ matrix.service }}:ci" \
+            --fail-on high \
+            --output "json=grype-${{ matrix.service }}.json" \
+            --output table
+
+      - name: Subir reporte de vulnerabilidades
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-${{ matrix.service }}
+          path: grype-${{ matrix.service }}.json
+          if-no-files-found: warn
