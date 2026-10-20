@@ -1,8 +1,8 @@
 # PDF ExtractExt — Infraestructura
 
 Stack Docker Compose de los 4 microservicios de extracción de PDFs, con Traefik
-como edge, MongoDB para persistencia, Redis como caché (efímero, sin volumen) y
-Ollama para resúmenes.
+como edge, MongoDB para persistencia, Redis como caché (efímero, sin volumen),
+Kafka como broker de mensajería (KRaft, single node) y Ollama para resúmenes.
 
 ## Requisitos
 
@@ -108,6 +108,12 @@ como verificación en un entorno desechable.
 
 Es el mismo test que corre el workflow `smoke.yml` en cada push a `main`.
 
+> **Kafka y el smoke test:** el `up` del smoke levanta `kafka` y `kafka-init`
+> (one-shot que crea `documents.extracted`) pero el flujo E2E todavía no pasa
+> por el broker: extraction→summary sigue siendo HTTP + jobs en Redis hasta que
+> los servicios consuman Kafka. No hay ningún chequeo de Kafka en el smoke, así
+> que un broker caído no lo haría fallar ni al revés.
+
 ## Comandos útiles
 
 ```bash
@@ -135,6 +141,16 @@ datos: `docker compose exec persistence-service ...`, o
 la caché) pero **sin puerto publicado al host**, igual que mongo. Se llega solo
 por dentro (`redis:6379`) o por `docker compose exec redis redis-cli ping`.
 
+**Kafka va en `mired`** (extraction y summary le hablan por `kafka:9092`), también
+sin puerto publicado al host. Corre en modo **KRaft single node**: broker y
+controller en el mismo proceso, sin ZooKeeper. El topic `documents.extracted`
+(particiones=1, replication=1) lo crea el one-shot `kafka-init` tras el health
+del broker, con `auto.create.topics.enable=false`: los topics se declaran
+explícitos, un typo en el nombre del productor no crea topics fantasma.
+
+Para inspeccionar topics: `docker compose exec kafka /opt/kafka/bin/kafka-topics.sh
+--bootstrap-server localhost:9092 --list`.
+
 ## Recursos y logs
 
 Cada servicio tiene `deploy.resources.limits` de memoria y CPU, para que un
@@ -154,7 +170,7 @@ Los logs usan el driver `json-file` con rotación de 10 MB × 3 por servicio (an
 ## Estructura
 
 ```
-docker-compose.yml            # los 4 servicios + ollama; incluye traefik/, mongodb/ y redis/
+docker-compose.yml            # los 4 servicios + ollama; incluye traefik/, mongodb/, redis/ y kafka/
 traefik/docker-compose.yml    # edge proxy (80/443), pineado por digest
 traefik/config/               # configuración estática, access log y dashboard
 traefik/certs/                # GITIGNORED: se regenera con el script
@@ -162,6 +178,7 @@ mongodb/docker-compose.yml    # mongo, solo en la red interna de datos
 mongodb/.env-example          # plantilla de credenciales
 mongodb/data/                 # GITIGNORED: datos de mongo
 redis/docker-compose.yml      # redis (caché), efimero y sin puerto publicado
+kafka/docker-compose.yml      # kafka (broker KRaft single-node) + kafka-init (crea topics)
 scripts/generate_certs.ps1    # regenera el par TLS
 scripts/smoke_test.ps1        # smoke test E2E
 .github/workflows/compose.yml # valida el compose

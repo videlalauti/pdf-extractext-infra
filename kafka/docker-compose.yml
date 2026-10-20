@@ -1,0 +1,91 @@
+# Los anchors de YAML no cruzan archivos: esta ancla es la copia local de la
+# que vive en el compose raiz.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+    # Broker unico en modo KRaft: el mismo proceso es broker y controller, asi
+    # no hay ZooKeeper que levantar ni que mantener (single-node de desarrollo).
+    kafka:
+        image: apache/kafka:4.3.1
+        container_name: kafka
+        restart: unless-stopped
+        logging: *logging
+        deploy:
+            resources:
+                limits:
+                    cpus: "1.0"
+                    memory: 1G
+        # Puerto de datos solo en la red de servicios: los servicios le hablan
+        # por `kafka:9092`. Para depurar desde el host:
+        # docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+        expose:
+            - "9092"
+        environment:
+            # KRaft single-node: broker y controller en el mismo proceso.
+            KAFKA_NODE_ID: 1
+            KAFKA_PROCESS_ROLES: broker,controller
+            KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+            KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+            # Los clientes (extraction, summary) llegan por el nombre del
+            # servicio en mired; escuchar solo en localhost romperia eso.
+            KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+            KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+            # Replicacion 1 porque hay un solo broker: con mas, el topic nunca
+            # terminaria de crearse.
+            KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+            KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+            KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+            KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+            KAFKA_NUM_PARTITIONS: 1
+            # Los topics se declaran explicitamente (kafka-init): un typo en el
+            # nombre del productor no debe crear topics fantasma.
+            KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+            # El heap default es la mitad de la RAM del container y con el limit
+            # de 1G directamente no entra: hay que acotarlo adentro.
+            KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
+        # Sin volumen (igual que redis): los eventos son transitorios y si hay
+        # que empezar de cero, kafka-init recrea el topic en el proximo up.
+        healthcheck:
+            # --list no crea topics, asi que funciona con auto.create desactivado.
+            test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+            interval: 10s
+            timeout: 10s
+            retries: 10
+            start_period: 30s
+        networks:
+            - mired
+
+    # One-shot: crea los topics declarados tras el health del broker.
+    # --if-not-exists la hace idempotente, asi un `up` repetido no falla.
+    kafka-init:
+        image: apache/kafka:4.3.1
+        container_name: kafka-init
+        restart: "no"
+        logging: *logging
+        deploy:
+            resources:
+                limits:
+                    cpus: "0.5"
+                    memory: 512M
+        depends_on:
+            kafka:
+                condition: service_healthy
+        entrypoint: ["/bin/sh", "-c"]
+        command:
+            - |
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+                  --create --if-not-exists \
+                  --topic documents.extracted \
+                  --partitions 1 \
+                  --replication-factor 1
+        networks:
+            - mired
+
+networks:
+    mired:
+        external: true

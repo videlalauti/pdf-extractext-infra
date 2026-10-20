@@ -2,10 +2,11 @@ include:
   - traefik/docker-compose.yml
   - mongodb/docker-compose.yml
   - redis/docker-compose.yml
+  - kafka/docker-compose.yml
 
-# Los anchors de YAML no cruzan archivos: cada compose (este, mongodb/, redis/ y
-# traefik/) define su propia copia de esta ancla. Por eso el bloque se repite
-# en vez de vivir en un include compartido.
+# Los anchors de YAML no cruzan archivos: cada compose (este, mongodb/, redis/,
+# kafka/ y traefik/) define su propia copia de esta ancla. Por eso el bloque se
+# repite en vez de vivir en un include compartido.
 x-logging: &logging
   driver: json-file
   options:
