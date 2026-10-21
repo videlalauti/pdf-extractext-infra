@@ -65,6 +65,9 @@ services:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
       # Backing service por URL (12-Factor): intercambiable sin tocar codigo.
       - REDIS_URL=redis://redis:6379
+      # El broker se resuelve por su nombre de servicio dentro de mired; con el
+      # default localhost:9092 el publisher no conecta y el evento se pierde.
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 10s
@@ -84,6 +87,10 @@ services:
       persistence-service:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      # El publisher es fail-open, asi que sin esperar al broker extraction
+      # levanta sin producer y el evento se pierde en silencio.
+      kafka:
         condition: service_healthy
 
   persistence-service:
@@ -141,6 +148,9 @@ services:
       # Backing service por URL (12-Factor): aca vive el estado y el resultado
       # de los jobs de resumen, asi el servicio se reinicia sin perderlos.
       - REDIS_URL=redis://redis:6379
+      # El broker se resuelve por su nombre de servicio dentro de mired; con el
+      # default localhost:9092 el consumer no arranca y GET /summary queda en 202.
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 10s
@@ -162,6 +172,10 @@ services:
       ollama:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      # El consumer tambien es fail-open: sin broker healthy levanta sin
+      # consumidor y nunca procesa documents.extracted.
+      kafka:
         condition: service_healthy
 
   ollama:
