@@ -92,6 +92,11 @@ services:
       # levanta sin producer y el evento se pierde en silencio.
       kafka:
         condition: service_healthy
+      # kafka-init crea documents.extracted y con KAFKA_AUTO_CREATE_TOPICS_ENABLE
+      # en false publicar contra un topic inexistente falla sin ruido. Es
+      # one-shot: compose espera a que termine con 0 antes de levantar esto.
+      kafka-init:
+        condition: service_completed_successfully
 
   persistence-service:
     build: ../pdf-extractext-persistence
@@ -177,6 +182,10 @@ services:
       # consumidor y nunca procesa documents.extracted.
       kafka:
         condition: service_healthy
+      # Suscribirse a un topic inexistente deja al consumer reintentando en
+      # loop. kafka-init lo crea; compose espera a que termine con 0.
+      kafka-init:
+        condition: service_completed_successfully
 
   ollama:
     image: ollama/ollama:0.34.4
