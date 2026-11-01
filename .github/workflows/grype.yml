@@ -57,14 +57,16 @@ jobs:
             | sh -s -- -b "$HOME/.local/bin" "${grype_version}"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # critical + high rompen el build (return code 2); medium y low solo
-      # quedan en el reporte. El JSON se escribe antes del exit, por eso el
-      # artifact se sube con if: always().
+      # critical o high CON fix rompen el build (return code 2); medium y low
+      # quedan solo en el reporte. --ignore-states=wont-fix exime unicamente lo
+      # que Debian declara que no va a parchear. El JSON se escribe antes del
+      # exit, por eso el artifact se sube con if: always().
       - name: Escanear imagen con Grype
         run: |
           set -euo pipefail
           grype "pdf-extractext-${{ matrix.service }}:ci" \
             --fail-on high \
+            --ignore-states=wont-fix \
             --output "json=grype-${{ matrix.service }}.json" \
             --output table
 
