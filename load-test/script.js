@@ -1,10 +1,12 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
 
-const VALIDATION_URL = __ENV.VALIDATION_URL || "http://localhost:8001";
-const EXTRACTION_URL = __ENV.EXTRACTION_URL || "http://localhost:8002";
-const PERSISTENCE_URL = __ENV.PERSISTENCE_URL || "http://localhost:8003";
-const SUMMARY_URL = __ENV.SUMMARY_URL || "http://localhost:8004";
+// Todo pasa por Traefik: los servicios no publican puertos en el host.
+// Para apuntar a otro host (o al override de dev) se sobreescriben por env.
+const VALIDATION_URL = __ENV.VALIDATION_URL || "http://validation.pdf.localhost";
+const EXTRACTION_URL = __ENV.EXTRACTION_URL || "http://extraction.pdf.localhost";
+const PERSISTENCE_URL = __ENV.PERSISTENCE_URL || "http://persistence.pdf.localhost";
+const SUMMARY_URL = __ENV.SUMMARY_URL || "http://summary.pdf.localhost";
 const PDF_PATH = __ENV.PDF_PATH || "../scripts/test.pdf";
 const pdfs = (__ENV.PDF_FILES || PDF_PATH)
   .split(",")

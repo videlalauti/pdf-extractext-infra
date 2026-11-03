@@ -34,8 +34,9 @@ services:
     logging: *logging
     deploy:
       resources: *recursos-app
-    ports:
-      - "8001:8000"
+    # Sin `ports`: el unico punto de entrada es Traefik por la red `mired`.
+    # Para depurar sin proxy hay que publicar el puerto en un override local
+    # (ver "Modos de ejecucion" en el README), nunca en este archivo.
     # Provisional: el HEALTHCHECK definitivo va en el Dockerfile (tarea VA).
     # Sin esto no se puede usar condition: service_healthy como dependencia.
     healthcheck:
@@ -59,8 +60,6 @@ services:
     logging: *logging
     deploy:
       resources: *recursos-app
-    ports:
-      - "8002:8000"
     environment:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
       # Backing service por URL (12-Factor): intercambiable sin tocar codigo.
@@ -105,8 +104,6 @@ services:
     logging: *logging
     deploy:
       resources: *recursos-app
-    ports:
-      - "8003:8000"
     # Las credenciales llegan por .env con los mismos nombres que usa mongo:
     # no hay defaults que puedan quedar desincronizados entre si.
     env_file:
@@ -145,8 +142,6 @@ services:
         limits:
           cpus: "1.5"
           memory: 1G
-    ports:
-      - "8004:8000"
     environment:
       - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
       - OLLAMA_URL=http://ollama:11434

@@ -60,6 +60,15 @@ jobs:
           free -h || true
           nproc
 
+      # Los nombres de Traefik no están en /etc/hosts del runner y que el
+      # resolver expanda *.localhost depende de la distro. Fijarlos hace el
+      # smoke determinista: sin esto, un fallo de DNS se ve como un 502 del
+      # proxy y no como lo que es.
+      - name: Resolver los hosts de Traefik a localhost
+        run: |
+          echo "127.0.0.1 validation.pdf.localhost extraction.pdf.localhost persistence.pdf.localhost summary.pdf.localhost traefik.localhost" \
+            | sudo tee -a /etc/hosts
+
       - name: Correr smoke test E2E
         run: pwsh -NoProfile -File ./scripts/smoke_test.ps1
 

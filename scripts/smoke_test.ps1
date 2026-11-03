@@ -2,10 +2,13 @@
 param(
     [string]$ComposeFile = "docker-compose.yml",
     [string]$TestCasePdf = "scripts/test.pdf",
-    [string]$ValidationUrl = "http://localhost:8001",
-    [string]$ExtractionUrl = "http://localhost:8002",
-    [string]$PersistenceUrl = "http://localhost:8003",
-    [string]$SummaryUrl = "http://localhost:8004",
+    # Por defecto se entra por Traefik (unico perimetro). Los servicios ya no
+    # publican 8001-8004 en el host; si hace falta pegarlos directo, usar el
+    # override de desarrollo y pasar estas URLs por parametro.
+    [string]$ValidationUrl = "http://validation.pdf.localhost",
+    [string]$ExtractionUrl = "http://extraction.pdf.localhost",
+    [string]$PersistenceUrl = "http://persistence.pdf.localhost",
+    [string]$SummaryUrl = "http://summary.pdf.localhost",
     [string]$ExternalNetwork = "mired",
     [int]$HealthTimeoutSeconds = 180,
     [int]$HealthRetrySeconds = 2

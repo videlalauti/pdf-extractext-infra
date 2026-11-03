@@ -68,20 +68,14 @@ vez tarda porque hay que construir las 4 imágenes y descargar Mongo y Ollama.
 
 ## Probar cada servicio
 
-Por Traefik (recomendado):
+El único punto de entrada es Traefik: los 4 servicios **no publican puertos** en
+el host.
 
 - http://validation.pdf.localhost/health
 - http://extraction.pdf.localhost/health
 - http://persistence.pdf.localhost/health
 - http://summary.pdf.localhost/health
 - https://traefik.localhost — dashboard
-
-O directo por puerto, sin pasar por Traefik:
-
-- http://localhost:8001/health
-- http://localhost:8002/health
-- http://localhost:8003/health
-- http://localhost:8004/health
 
 > Los puertos de **datos** (Mongo 27017, Ollama 11434, Redis 6379) están solo en
 > la red interna de Docker: publicarlos saltearía el perímetro de Traefik. Para
