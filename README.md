@@ -1,8 +1,10 @@
 # PDF ExtractExt — Infraestructura
 
 Stack Docker Compose de los 4 microservicios de extracción de PDFs, con Traefik
-como edge, MongoDB para persistencia, Redis como caché (efímero, sin volumen),
-Kafka como broker de mensajería (KRaft, single node) y Ollama para resúmenes.
+como **único punto de entrada** (TLS y ruteo por host): ningún servicio publica
+puertos en el host. Detrás: MongoDB para persistencia, Redis como caché
+(efímero, sin volumen), Kafka como broker de mensajería (KRaft, single node) y
+Ollama para resúmenes.
 
 ## Requisitos
 
@@ -134,6 +136,35 @@ el host.
 > Para pegarle directo a un servicio (sin Traefik) hace falta el override de
 > desarrollo: ver [Modos de ejecución](#modos-de-ejecución).
 
+## Flujo de eventos
+
+El camino real de un PDF, sin atajos:
+
+1. `validation` valida el PDF.
+2. `extraction` extrae el texto, lo persiste en `persistence` y **publica el
+   evento `documents.extracted`** en Kafka (schema v1: `document_id`,
+   `checksum`, `request_id`).
+3. `summary` **consume** ese evento (`group_id=summary-service`,
+   `auto_offset_reset=earliest`) y genera el resumen con Ollama. El resultado se
+   guarda en Redis con TTL de 1 h.
+
+La publicación es **fail-open**: si Kafka está caído, `extraction` reintenta 3
+veces y responde igual, con `summary_status: "unavailable"` en vez de un 5xx (el
+documento ya quedó persistido). El cliente puede pedir el resumen explícito con
+`POST /summary/{id}`.
+
+### Contrato de summary
+
+| Llamada | Resultado |
+| --- | --- |
+| `POST /summary/{document_id}` | `200` con el resumen si ya existe; `202 {"status":"queued"}` si recién se encola |
+| `GET /summary/{document_id}` | `200` con el resumen cuando está listo; `202 {"status":"queued"}` mientras corre; `404` si nunca se pidió |
+
+El `POST` también agenda el trabajo en background: el evento de Kafka es el
+camino normal, pero un evento perdido no deja al pedido explícito en `queued`
+para siempre. La inferencia de Ollama puede tardar minutos: `202` no es un
+error, es "seguí consultando con `GET`".
+
 ## Smoke test
 
 ```powershell
@@ -154,11 +185,24 @@ como verificación en un entorno desechable.
 
 Es el mismo test que corre el workflow `smoke.yml` en cada push a `main`.
 
-> **Kafka y el smoke test:** el `up` del smoke levanta `kafka` y `kafka-init`
-> (one-shot que crea `documents.extracted`) pero el flujo E2E todavía no pasa
-> por el broker: extraction→summary sigue siendo HTTP + jobs en Redis hasta que
-> los servicios consuman Kafka. No hay ningún chequeo de Kafka en el smoke, así
-> que un broker caído no lo haría fallar ni al revés.
+> **En Windows**, PowerShell/.NET no resuelven `*.pdf.localhost` aunque el
+> navegador sí: si el smoke falla con "no se puede resolver el nombre", agregá
+> los hosts a `C:\Windows\System32\drivers\etc\hosts` (como administrador):
+>
+> ```text
+> 127.0.0.1 validation.pdf.localhost extraction.pdf.localhost persistence.pdf.localhost summary.pdf.localhost traefik.localhost
+> ```
+>
+> El workflow hace ese mismo paso en el `/etc/hosts` del runner para no depender
+> del resolver de la distro.
+
+> **Kafka y el smoke test:** el `up` levanta `kafka` y `kafka-init` (one-shot que
+> crea `documents.extracted`) y `extraction` publica el evento al extraer. El
+> smoke **no verifica el broker de forma directa**: si Kafka está caído,
+> `extraction` igual responde (`summary_status: "unavailable"`) y el
+> `POST /summary` explícito recalcula, así que el E2E puede pasar. Para saber si
+> el consumer está vivo, mirar `GET /health` de `summary`, que devuelve
+> `kafka: connected|disconnected` junto con el estado de Ollama.
 
 ## Comandos útiles
 
