@@ -41,7 +41,9 @@ credenciales que puedan desincronizarse.
 
 > Ojo: Mongo solo aplica `MONGO_INITDB_ROOT_*` la **primera** vez que crea el
 > volumen. Si cambiaste la password después, hay que borrar `mongodb/data/` y
-> volver a levantar.
+> volver a levantar. Para rotarla hay un script que hace las dos cosas y avisa
+> del orden: `.\scripts\rotate_mongo_credentials.ps1` (y después
+> `-ResetData` con el stack abajo).
 
 ### 2. Certificados TLS de Traefik
 
@@ -225,6 +227,7 @@ mongodb/data/                 # GITIGNORED: datos de mongo
 redis/docker-compose.yml      # redis (caché), efimero y sin puerto publicado
 kafka/docker-compose.yml      # kafka (broker KRaft single-node) + kafka-init (crea topics)
 scripts/generate_certs.ps1    # regenera el par TLS
+scripts/rotate_mongo_credentials.ps1  # rota la password de Mongo del .env local
 scripts/smoke_test.ps1        # smoke test E2E
 .github/workflows/compose.yml # valida el compose
 .github/workflows/smoke.yml   # corre el smoke E2E en cada push a main
