@@ -48,8 +48,11 @@ services:
             # El heap default es la mitad de la RAM del container y con el limit
             # de 1G directamente no entra: hay que acotarlo adentro.
             KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
-        # Sin volumen (igual que redis): los eventos son transitorios y si hay
-        # que empezar de cero, kafka-init recrea el topic en el proximo up.
+        # Mantener el log y offsets de Kafka entre recreaciones de contenedor.
+        # El topic sigue siendo de una sola réplica: esto no reemplaza backups
+        # ni alta disponibilidad.
+        volumes:
+            - kafka-data:/var/lib/kafka/data
         healthcheck:
             # --list no crea topics, asi que funciona con auto.create desactivado.
             test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
@@ -85,6 +88,9 @@ services:
                   --replication-factor 1
         networks:
             - mired
+
+volumes:
+    kafka-data:
 
 networks:
     mired:
