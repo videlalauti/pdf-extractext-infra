@@ -197,13 +197,12 @@ Es el mismo test que corre el workflow `smoke.yml` en cada push a `main`.
 > El workflow hace ese mismo paso en el `/etc/hosts` del runner para no depender
 > del resolver de la distro.
 
-> **Kafka y el smoke test:** el `up` levanta `kafka` y `kafka-init` (one-shot que
-> crea `documents.extracted`) y `extraction` publica el evento al extraer. El
-> smoke **no verifica el broker de forma directa**: si Kafka está caído,
-> `extraction` igual responde (`summary_status: "unavailable"`) y el
-> `POST /summary` explícito recalcula, así que el E2E puede pasar. Para saber si
-> el consumer está vivo, mirar `GET /health` de `summary`, que devuelve
-> `kafka: connected|disconnected` junto con el estado de Ollama.
+> **Kafka y el smoke test:** `kafka-init` crea `documents.extracted`.
+> El smoke requiere `summary_status: "queued"` al subir un PDF y consulta
+> `GET /summary` hasta obtener el resultado. Como GET también puede recuperar
+> un trabajo pendiente, no demuestra por sí solo que el consumer realizó la
+> inferencia; para comprobar el consumo, inspeccionar el grupo de Kafka y sus
+> offsets. `GET /health` de Summary informa la conexión al broker.
 
 ## Comandos útiles
 
@@ -249,11 +248,11 @@ Cada servicio tiene `deploy.resources.limits` de memoria y CPU, para que un
 servicio que se coma la RAM no tumbe al resto. Ollama se lleva 6G porque cargar
 un modelo en RAM son gigas; el resto va entre 256M y 2G.
 
-Redis acota en dos niveles: el contenedor a **256 MB / 0.5 CPU** (bulkhead, como
-el resto) y adentro `--maxmemory 128mb --maxmemory-policy noeviction`. Es
-**efímero**: no tiene volumen, así que cada `down` lo deja vacío (la caché se
-reconstruye sola; si un dataset no entra en 128 MB, Redis falla explícito en
-los logs en vez de descartar entradas en silencio).
+Redis acota en dos niveles: el contenedor a **256 MB / 0.5 CPU** y
+`--maxmemory 128mb --maxmemory-policy noeviction`. Usa AOF (`appendfsync
+everysec`) y el volumen `redis-data`, conservado por `docker compose down`
+sin `-v`. Los trabajos tienen TTL según su estado, por lo que ni el volumen
+ni AOF reemplazan almacenamiento durable de largo plazo.
 
 Los logs usan el driver `json-file` con rotación de 10 MB × 3 por servicio (ancla
 `x-logging` en los tres compose). Traefik además tiene `accessLog` en JSON, con
