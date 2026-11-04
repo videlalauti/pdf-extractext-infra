@@ -380,11 +380,15 @@ try {
         if ($stored.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace(($stored.Output -join "").Trim())) {
             Fail "Redis perdió el job de resumen tras el reinicio"
         }
+        # El estado es ASCII y se puede leer con redis-cli en cualquier
+        # sistema. El texto del resumen puede contener acentos: Windows
+        # PowerShell decodifica la salida nativa con otra página de códigos,
+        # por lo que compararlo aquí daría un falso negativo.
         $restoredJob = ($stored.Output -join "`n") | ConvertFrom-Json
-        if ($restoredJob.status -ne "done" -or $restoredJob.summary -ne $summary.summary) {
-            Fail "El resumen recuperado de Redis no coincide con el original"
+        if ($restoredJob.status -ne "done") {
+            Fail "Redis no recuperó el estado terminal del job (estado=$($restoredJob.status))"
         }
-        Write-Step "OK  Redis recupero el resumen desde AOF"
+        Write-Step "OK  Redis recupero el estado done desde AOF"
 
         # El volumen de Kafka debe conservar al menos el topic declarado.
         $topics = Invoke-DockerCapture -DockerArgs @(
@@ -397,6 +401,16 @@ try {
         Write-Step "OK  Kafka recupero el topic documents.extracted"
 
         Wait-ServiceHealth -Name "summary-service" -BaseUrl $SummaryUrl
+
+        # Verificar el contenido recuperado mediante HTTP JSON UTF-8, no por
+        # stdout de docker exec: evita comparar cadenas con acentos corruptos
+        # por la codificación de la consola de Windows.
+        $restoredSummary = Invoke-Api -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
+        if ($restoredSummary.document_id -ne $documentId -or
+            $restoredSummary.summary -cne $summary.summary) {
+            Fail "El resumen recuperado por la API tras reiniciar Redis no coincide con el original"
+        }
+        Write-Step "OK  Redis recupero el contenido del resumen sin cambios"
 
         # Una segunda carga obliga a usar el broker y consumer recuperados.
         $secondMarker = [System.Text.Encoding]::ASCII.GetBytes(
