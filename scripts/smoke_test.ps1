@@ -245,7 +245,16 @@ try {
 
     Ensure-OllamaModel
 
-    $pdfBytes = [System.IO.File]::ReadAllBytes($pdfPath)
+    # Cada ejecución usa un checksum único para evitar que un documento
+    # previamente resumido en Redis haga pasar una prueba sin consumir Kafka.
+    # Agregar un comentario después del EOF mantiene intactos los objetos PDF.
+    $originalBytes = [System.IO.File]::ReadAllBytes($pdfPath)
+    $markerBytes = [System.Text.Encoding]::ASCII.GetBytes(
+        "`n% smoke-run:" + [guid]::NewGuid().ToString("N") + "`n"
+    )
+    $pdfBytes = New-Object byte[] ($originalBytes.Length + $markerBytes.Length)
+    [System.Array]::Copy($originalBytes, 0, $pdfBytes, 0, $originalBytes.Length)
+    [System.Array]::Copy($markerBytes, 0, $pdfBytes, $originalBytes.Length, $markerBytes.Length)
     $pdfName = Split-Path -Leaf $pdfPath
 
     Write-Step "Enviando PDF a /validate"
@@ -280,31 +289,59 @@ try {
     if ($document.content -ne $extraction.text) {
         Fail "El contenido persistido no coincide con el texto extraido"
     }
-    $expectedChecksum = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $expectedChecksum = [System.BitConverter]::ToString(
+            $hasher.ComputeHash($pdfBytes)
+        ).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $hasher.Dispose()
+    }
     if ($document.checksum -ne $expectedChecksum) {
         Fail "El checksum no coincide (esperado $expectedChecksum, obtenido $($document.checksum))"
     }
     Write-Step "OK  /documents/$documentId -> content y checksum verificados"
 
-    Write-Step "Esperando resumen automatico por Kafka (sin llamar a POST /summary)"
-    # GET puede reencolar si falta Redis: este smoke comprueba el camino visible
-    # al cliente y exige que /upload haya confirmado su publicacion a Kafka.
-    $summary = $null
+    Write-Step "Esperando procesamiento Kafka en Redis (sin GET/POST /summary)"
+    # No consultar Summary hasta que Redis registre 'done'. GET /summary
+    # también puede disparar un trabajo: usarlo durante el poll escondería
+    # un consumer de Kafka que no está funcionando.
     $deadline = (Get-Date).AddSeconds(300)
+    $job = $null
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 5
-        $poll = Invoke-ApiResponse -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
-        if ($poll.StatusCode -eq 200) {
-            $summary = $poll.Body
+        $read = Invoke-DockerCapture -DockerArgs @(
+            "exec", "redis", "redis-cli", "--raw", "GET", "summary:$documentId"
+        )
+        if ($read.ExitCode -ne 0) {
+            Fail "No se pudo leer el estado en Redis (exit $($read.ExitCode))"
+        }
+        $rawJob = ($read.Output -join "`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($rawJob)) {
+            continue
+        }
+        try {
+            $job = $rawJob | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            Fail "Redis devolvió un estado inválido para el resumen"
+        }
+        if ($job.status -eq "done") {
             break
         }
-        if ($poll.StatusCode -ne 202) {
-            Fail "/summary (GET) respondio $($poll.StatusCode); se esperaba 202 o 200"
+        if ($job.status -eq "failed") {
+            Fail "Summary falló al procesar el evento: $($job.reason)"
         }
     }
-    if ($null -eq $summary) {
-        Fail "Timeout esperando resumen automatico por Kafka (300 s)"
+    if ($null -eq $job -or $job.status -ne "done") {
+        Fail "Timeout: no se completó el job por Kafka en Redis (300 s)"
     }
+    Write-Step "OK  Kafka -> Summary -> Redis: status=done"
+
+    # Leer el resultado desde la API únicamente después de demostrar que
+    # el evento disparó el procesamiento (sin recuperación por GET).
+    $summary = Invoke-Api -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
     if ([string]::IsNullOrWhiteSpace($summary.summary)) {
         Fail "/summary devolvio un resumen vacio"
     }
