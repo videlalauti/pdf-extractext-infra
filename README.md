@@ -186,16 +186,12 @@ como verificación en un entorno desechable.
 
 Es el mismo test que corre el workflow `smoke.yml` en cada push a `main`.
 
-> **En Windows**, PowerShell/.NET no resuelven `*.pdf.localhost` aunque el
-> navegador sí: si el smoke falla con "no se puede resolver el nombre", agregá
-> los hosts a `C:\Windows\System32\drivers\etc\hosts` (como administrador):
->
-> ```text
-> 127.0.0.1 validation.pdf.localhost extraction.pdf.localhost persistence.pdf.localhost summary.pdf.localhost traefik.localhost
-> ```
->
-> El workflow hace ese mismo paso en el `/etc/hosts` del runner para no depender
-> del resolver de la distro.
+> **En Windows**, `*.pdf.localhost` puede no resolverse correctamente
+> desde PowerShell. El smoke usa `127.0.0.1` con la cabecera HTTP `Host`
+> original, de modo que Traefik reconoce cada servicio sin modificar
+> `C:\Windows\System32\drivers\etc\hosts` ni pedir permisos de administrador.
+> Para acceder con otras herramientas que no permiten elegir esa cabecera,
+> puede seguir siendo necesario configurar la resolución de nombres.
 
 > **Kafka y el smoke test:** `kafka-init` crea `documents.extracted`.
 > El smoke requiere `summary_status: "queued"` al subir un PDF y consulta
