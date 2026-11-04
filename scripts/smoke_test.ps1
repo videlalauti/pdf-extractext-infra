@@ -53,6 +53,20 @@ function Invoke-ApiResponse {
         UseBasicParsing = $true
         TimeoutSec = $TimeoutSec
     }
+    # En Windows, *.pdf.localhost no siempre se resuelve a IPv4.
+    # Traefik escucha en 127.0.0.1; conservar Host mantiene el router correcto
+    # sin tocar el archivo hosts ni requerir privilegios de administrador.
+    $target = [uri]$Uri
+    if ($target.Scheme -eq "http" -and
+        $target.Host.EndsWith(".pdf.localhost", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $params.Uri = "http://127.0.0.1$($target.PathAndQuery)"
+        $params.Headers = @{ Host = $target.Host }
+        # PowerShell 7 puede respetar HTTP_PROXY aun para dominios .localhost.
+        # NoProxy no existe en Windows PowerShell 5.1, por eso es condicional.
+        if ((Get-Command Invoke-WebRequest).Parameters.ContainsKey("NoProxy")) {
+            $params.NoProxy = $true
+        }
+    }
     if ($BytesBody -ne $null) {
         $params.Body = $BytesBody
         $params.ContentType = $ContentType
@@ -137,6 +151,7 @@ function Invoke-Docker {
 function Wait-ServiceHealth {
     param([string]$Name, [string]$BaseUrl)
     Write-Step "Esperando health de $Name en $BaseUrl/health ..."
+    $lastError = $null
     $deadline = (Get-Date).AddSeconds($HealthTimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         try {
@@ -147,10 +162,11 @@ function Wait-ServiceHealth {
             }
         }
         catch {
+            $lastError = $_.Exception.Message
         }
         Start-Sleep -Seconds $HealthRetrySeconds
     }
-    Fail "Timeout esperando health de $Name en $BaseUrl/health (limite $HealthTimeoutSeconds s)"
+    Fail "Timeout esperando health de $Name en $BaseUrl/health (limite $HealthTimeoutSeconds s). Ultimo error: $lastError"
 }
 
 function Invoke-DockerCapture {
