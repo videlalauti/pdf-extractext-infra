@@ -180,6 +180,17 @@ cada 5 segundos el estado del job en Redis hasta `done` (máx. 300 s).
 Así, el GET no puede esconder un fallo del consumer de Kafka al reencolar un
 trabajo faltante. El archivo `scripts/test.pdf` original no se modifica.
 
+Para probar además la recuperación real de la infraestructura:
+
+```powershell
+.\scripts\smoke_test.ps1 -CheckRecovery
+```
+
+Esta opción reinicia Kafka y Redis, verifica que el resumen persista en el
+volumen AOF, comprueba que el topic Kafka siga presente y envía otro PDF
+para demostrar que el productor y consumidor se reconectaron. El workflow
+de GitHub Actions ejecuta también este escenario.
+
 Al terminar **baja el stack**, haya pasado o fallado: si algo falla, vuelca los
 últimos logs de los contenedores antes de limpiar. Para quedarte con el stack
 prendido, levantalo a mano con `docker compose up -d` y usá el script solo
