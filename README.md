@@ -187,8 +187,9 @@ El dominio compartido entre servicios ya no vive acá: se instala desde
 - `OLLAMA_CONTEXT_LENGTH` se puede sobreescribir por entorno; el default es
   `32768`, pensado para PDFs largos.
 - La red `mired` es externa: hay que crearla antes del primer `up`.
-- Los healthcheck de `/health` están en el compose, no en el Dockerfile de cada
-  servicio. Son provisorios: hacen falta para que `condition: service_healthy`
-  funcione, y se pueden borrar cuando cada servicio traiga el suyo.
+- El healthcheck de `/health` vive en el **Dockerfile** de cada servicio, no en
+  el compose. Compose hereda el de la imagen y lo usa para
+  `condition: service_healthy` y para `docker compose ps`: una sola fuente de
+  verdad por servicio.
 - La llave TLS que estuvo commiteada en el historial fue purgada; si clonaste
   este repo antes, borrá el directorio local y cloná de nuevo.

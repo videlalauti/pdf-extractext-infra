@@ -37,14 +37,7 @@ services:
     # Sin `ports`: el unico punto de entrada es Traefik por la red `mired`.
     # Para depurar sin proxy hay que publicar el puerto en un override local
     # (ver "Modos de ejecucion" en el README), nunca en este archivo.
-    # Provisional: el HEALTHCHECK definitivo va en el Dockerfile (tarea VA).
-    # Sin esto no se puede usar condition: service_healthy como dependencia.
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
     labels:
       <<: *traefik-labels
       traefik.http.routers.validation.rule: "Host(`validation.pdf.localhost`)"
@@ -67,12 +60,7 @@ services:
       # El broker se resuelve por su nombre de servicio dentro de mired; con el
       # default localhost:9092 el publisher no conecta y el evento se pierde.
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
     labels:
       <<: *traefik-labels
       traefik.http.routers.extraction.rule: "Host(`extraction.pdf.localhost`)"
@@ -113,12 +101,7 @@ services:
       - MONGODB_PORT=27017
       - MONGODB_DATABASE_NAME=pdf_extractext
       - MONGODB_AUTH_SOURCE=admin
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+    # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
     labels:
       <<: *traefik-labels
       traefik.http.routers.persistence.rule: "Host(`persistence.pdf.localhost`)"
@@ -151,12 +134,7 @@ services:
       # El broker se resuelve por su nombre de servicio dentro de mired; con el
       # default localhost:9092 el consumer no arranca y GET /summary queda en 202.
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
     labels:
       <<: *traefik-labels
       traefik.http.routers.summary.rule: "Host(`summary.pdf.localhost`)"
