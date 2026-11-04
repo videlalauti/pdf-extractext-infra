@@ -1,10 +1,10 @@
 # PDF ExtractExt — Infraestructura
 
 Stack Docker Compose de los 4 microservicios de extracción de PDFs, con Traefik
-como **único punto de entrada** (TLS y ruteo por host): ningún servicio publica
-puertos en el host. Detrás: MongoDB para persistencia, Redis como caché
-(efímero, sin volumen), Kafka como broker de mensajería (KRaft, single node) y
-Ollama para resúmenes.
+como punto de entrada local (TLS y ruteo por host, puertos 80/443 ligados a
+127.0.0.1). Detrás: MongoDB, Redis con persistencia AOF y Kafka en modo
+KRaft de un solo nodo con volumen para eventos y offsets, más Ollama para
+generar resúmenes.
 
 ## Requisitos
 
@@ -146,7 +146,7 @@ El camino real de un PDF, sin atajos:
    `checksum`, `request_id`).
 3. `summary` **consume** ese evento (`group_id=summary-service`,
    `auto_offset_reset=earliest`) y genera el resumen con Ollama. El resultado se
-   guarda en Redis con TTL de 1 h.
+   guarda en Redis con TTL de 7 días; los estados no terminales usan 1 h.
 
 La publicación es **fail-open**: si Kafka está caído, `extraction` reintenta 3
 veces y responde igual, con `summary_status: "unavailable"` en vez de un 5xx (el
@@ -171,12 +171,13 @@ error, es "seguí consultando con `GET`".
 .\scripts\smoke_test.ps1
 ```
 
-Levanta el stack, espera el health de los 4 servicios y recorre el flujo completo
-con `scripts/test.pdf`: valida, extrae, verifica el documento persistido por id
-y por checksum, y genera el resumen. El resumen tolera los dos contratos: si
-`POST /summary` responde `200` usa el resultado directo; si responde `202`
-(encola) hace poll a `GET /summary` cada 5 s hasta el `200` (máx 300 s). Sale
-con código 0 si todo pasó.
+Levanta el stack, espera el health de los 4 servicios y recorre el flujo
+con `scripts/test.pdf`: valida, llama a `POST /upload` (orquestación real),
+verifica documento y checksum y exige `summary_status=queued`. Después hace
+poll a `GET /summary` cada 5 s hasta el `200` (máx. 300 s), sin llamar
+a `POST /summary`. El GET también puede recuperar trabajos faltantes, así que
+el smoke comprueba el resultado visible y la confirmación de publicación, pero
+no prueba por sí solo que Kafka sea el único disparador del resumen.
 
 Al terminar **baja el stack**, haya pasado o fallado: si algo falla, vuelca los
 últimos logs de los contenedores antes de limpiar. Para quedarte con el stack
@@ -236,7 +237,8 @@ sin puerto publicado al host. Corre en modo **KRaft single node**: broker y
 controller en el mismo proceso, sin ZooKeeper. El topic `documents.extracted`
 (particiones=1, replication=1) lo crea el one-shot `kafka-init` tras el health
 del broker, con `auto.create.topics.enable=false`: los topics se declaran
-explícitos, un typo en el nombre del productor no crea topics fantasma.
+explícitos. El volumen `kafka-data` conserva eventos y offsets entre
+recreaciones ordinarias, pero un único broker no es alta disponibilidad.
 
 Para inspeccionar topics: `docker compose exec kafka /opt/kafka/bin/kafka-topics.sh
 --bootstrap-server localhost:9092 --list`.
@@ -268,8 +270,8 @@ traefik/certs/                # GITIGNORED: se regenera con el script
 mongodb/docker-compose.yml    # mongo, solo en la red interna de datos
 mongodb/.env-example          # plantilla de credenciales
 mongodb/data/                 # GITIGNORED: datos de mongo
-redis/docker-compose.yml      # redis (caché), efimero y sin puerto publicado
-kafka/docker-compose.yml      # kafka (broker KRaft single-node) + kafka-init (crea topics)
+redis/docker-compose.yml      # redis con AOF y volumen, sin puerto publicado
+kafka/docker-compose.yml      # Kafka KRaft single-node con volumen + kafka-init
 scripts/generate_certs.ps1    # regenera el par TLS
 scripts/rotate_mongo_credentials.ps1  # rota la password de Mongo del .env local
 scripts/smoke_test.ps1        # smoke test E2E
