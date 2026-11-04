@@ -85,8 +85,8 @@ jobs:
           echo "127.0.0.1 validation.pdf.localhost extraction.pdf.localhost persistence.pdf.localhost summary.pdf.localhost traefik.localhost" \
             | sudo tee -a /etc/hosts
 
-      - name: Correr smoke test E2E
-        run: pwsh -NoProfile -File ./scripts/smoke_test.ps1
+      - name: Correr smoke test E2E y recuperación
+        run: pwsh -NoProfile -File ./scripts/smoke_test.ps1 -CheckRecovery
 
       # El script ya baja el stack en su finally. Esto es una red de seguridad:
       # si el runner se cae a mitad de camino, el job no debe dejar el job
