@@ -7,12 +7,29 @@ x-logging: &logging
     max-file: "3"
 
 services:
+    # El volumen de Docker puede crearse como root, pero Kafka ejecuta con
+    # UID 1000. Inicializar permisos antes del broker evita AccessDeniedException
+    # durante el formato KRaft, también al reutilizar un volumen existente.
+    kafka-volume-init:
+        image: apache/kafka:4.3.1
+        user: "0:0"
+        restart: "no"
+        entrypoint: ["/bin/sh", "-c"]
+        command:
+            - "chown -R 1000:1000 /kafka-data && chmod u+rwx /kafka-data"
+        volumes:
+            - kafka-data:/kafka-data
+        network_mode: "none"
+
     # Broker unico en modo KRaft: el mismo proceso es broker y controller, asi
     # no hay ZooKeeper que levantar ni que mantener (single-node de desarrollo).
     kafka:
         image: apache/kafka:4.3.1
         container_name: kafka
         restart: unless-stopped
+        depends_on:
+            kafka-volume-init:
+                condition: service_completed_successfully
         logging: *logging
         deploy:
             resources:
@@ -42,14 +59,20 @@ services:
             KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
             KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
             KAFKA_NUM_PARTITIONS: 1
+            # La ruta debe coincidir con el volumen: de otro modo se persiste
+            # un directorio vacío mientras Kafka escribe en /tmp.
+            KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
             # Los topics se declaran explicitamente (kafka-init): un typo en el
             # nombre del productor no debe crear topics fantasma.
             KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
             # El heap default es la mitad de la RAM del container y con el limit
             # de 1G directamente no entra: hay que acotarlo adentro.
             KAFKA_HEAP_OPTS: "-Xms512m -Xmx512m"
-        # Sin volumen (igual que redis): los eventos son transitorios y si hay
-        # que empezar de cero, kafka-init recrea el topic en el proximo up.
+        # Mantener el log y offsets de Kafka entre recreaciones de contenedor.
+        # El topic sigue siendo de una sola réplica: esto no reemplaza backups
+        # ni alta disponibilidad.
+        volumes:
+            - kafka-data:/tmp/kraft-combined-logs
         healthcheck:
             # --list no crea topics, asi que funciona con auto.create desactivado.
             test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
@@ -85,6 +108,9 @@ services:
                   --replication-factor 1
         networks:
             - mired
+
+volumes:
+    kafka-data:
 
 networks:
     mired:

@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+  pull_request:
 
 permissions:
   contents: read
@@ -28,12 +29,27 @@ jobs:
       # decir hermanos de este repo. Si no estan, `docker compose up` no falla
       # por config: falla al no encontrar el Dockerfile.
       - name: Clonar los repos de servicios
+        env:
+          # El PR de migración comprueba las cuatro ramas propuestas en conjunto.
+          # En main y en los demás PRs se sigue usando el código integrado.
+          INTEGRATION_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'fix/durable-stack-and-e2e-20261104' }}
         run: |
           set -euo pipefail
           for repo in validation extraction persistence summary; do
             git clone --depth 1 \
               "https://github.com/${{ github.repository_owner }}/pdf-extractext-${repo}.git" \
               "../pdf-extractext-${repo}"
+            if [[ "$INTEGRATION_PR" == "true" ]]; then
+              case "$repo" in
+                validation) branch=fix/validate-config-limits-20261104 ;;
+                extraction) branch=fix/kafka-producer-recovery-20261104 ;;
+                persistence) branch=fix/startup-cleanup-20261104 ;;
+                summary) branch=fix/reliability-no-silent-kafka-loss-20261104 ;;
+              esac
+              git -C "../pdf-extractext-${repo}" fetch --depth 1 origin "$branch"
+              git -C "../pdf-extractext-${repo}" checkout --detach FETCH_HEAD
+              echo "$repo -> $branch"
+            fi
           done
           ls -1 ..
 
@@ -69,8 +85,8 @@ jobs:
           echo "127.0.0.1 validation.pdf.localhost extraction.pdf.localhost persistence.pdf.localhost summary.pdf.localhost traefik.localhost" \
             | sudo tee -a /etc/hosts
 
-      - name: Correr smoke test E2E
-        run: pwsh -NoProfile -File ./scripts/smoke_test.ps1
+      - name: Correr smoke test E2E y recuperación
+        run: pwsh -NoProfile -File ./scripts/smoke_test.ps1 -CheckRecovery
 
       # El script ya baja el stack en su finally. Esto es una red de seguridad:
       # si el runner se cae a mitad de camino, el job no debe dejar el job

@@ -11,33 +11,34 @@
 # `docker compose` carga `docker-compose.override.yml` automaticamente; se
 # versiona solo el `.example` para que un clone no abra puertos sin querer.
 # NO usar en produccion: cada puerto publicado es un camino que saltea Traefik.
+# Se ligan a 127.0.0.1 para evitar accesos desde otros equipos de la LAN.
 
 services:
   validation-service:
-    ports: ["8001:8000"]
+    ports: ["127.0.0.1:8001:8000"]
   extraction-service:
-    ports: ["8002:8000"]
+    ports: ["127.0.0.1:8002:8000"]
   persistence-service:
-    ports: ["8003:8000"]
+    ports: ["127.0.0.1:8003:8000"]
   summary-service:
-    ports: ["8004:8000"]
+    ports: ["127.0.0.1:8004:8000"]
 
   # Backing services: solo se publican para llegar desde el host.
   mongo:
-    ports: ["27017:27017"]
+    ports: ["127.0.0.1:27017:27017"]
   redis:
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:6379:6379"]
 
   # Kafka no alcanza con publicar 9092: el broker anuncia `kafka:9092`, un
   # nombre que el host no resuelve. Se agrega un listener EXTERNAL en 9094 con
   # su propio nombre anunciado (`localhost:9094`); los servicios siguen usando
   # `kafka:9092` por la red de Docker.
   kafka:
-    ports: ["9094:9094"]
+    ports: ["127.0.0.1:9094:9094"]
     environment:
       KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094"
       KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
 
   ollama:
-    ports: ["11434:11434"]
+    ports: ["127.0.0.1:11434:11434"]

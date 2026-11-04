@@ -1,10 +1,10 @@
 # PDF ExtractExt — Infraestructura
 
 Stack Docker Compose de los 4 microservicios de extracción de PDFs, con Traefik
-como **único punto de entrada** (TLS y ruteo por host): ningún servicio publica
-puertos en el host. Detrás: MongoDB para persistencia, Redis como caché
-(efímero, sin volumen), Kafka como broker de mensajería (KRaft, single node) y
-Ollama para resúmenes.
+como punto de entrada local (TLS y ruteo por host, puertos 80/443 ligados a
+127.0.0.1). Detrás: MongoDB, Redis con persistencia AOF y Kafka en modo
+KRaft de un solo nodo con volumen para eventos y offsets, más Ollama para
+generar resúmenes.
 
 ## Requisitos
 
@@ -146,7 +146,7 @@ El camino real de un PDF, sin atajos:
    `checksum`, `request_id`).
 3. `summary` **consume** ese evento (`group_id=summary-service`,
    `auto_offset_reset=earliest`) y genera el resumen con Ollama. El resultado se
-   guarda en Redis con TTL de 1 h.
+   guarda en Redis con TTL de 7 días; los estados no terminales usan 1 h.
 
 La publicación es **fail-open**: si Kafka está caído, `extraction` reintenta 3
 veces y responde igual, con `summary_status: "unavailable"` en vez de un 5xx (el
@@ -171,38 +171,47 @@ error, es "seguí consultando con `GET`".
 .\scripts\smoke_test.ps1
 ```
 
-Levanta el stack, espera el health de los 4 servicios y recorre el flujo completo
-con `scripts/test.pdf`: valida, extrae, verifica el documento persistido por id
-y por checksum, y genera el resumen. El resumen tolera los dos contratos: si
-`POST /summary` responde `200` usa el resultado directo; si responde `202`
-(encola) hace poll a `GET /summary` cada 5 s hasta el `200` (máx 300 s). Sale
-con código 0 si todo pasó.
+Levanta el stack, espera el health de los cuatro servicios y recorre
+el flujo con `scripts/test.pdf`. Agrega un comentario único al PDF para que
+cada corrida tenga su propio checksum, lo valida y lo envía a `POST /upload`.
+Comprueba persistencia y publicación (`summary_status=queued`), y consulta
+cada 5 segundos el estado del job en Redis hasta `done` (máx. 300 s).
+**Recién después llama a `GET /summary`** para comprobar el resultado.
+Así, el GET no puede esconder un fallo del consumer de Kafka al reencolar un
+trabajo faltante. El archivo `scripts/test.pdf` original no se modifica.
+
+Para probar además la recuperación real de la infraestructura:
+
+```powershell
+.\scripts\smoke_test.ps1 -CheckRecovery
+```
+
+Esta opción reinicia Kafka y Redis, verifica que el resumen persista en el
+volumen AOF, comprueba que el topic Kafka siga presente y envía otro PDF
+para demostrar que el productor y consumidor se reconectaron. El workflow
+de GitHub Actions ejecuta también este escenario.
 
 Al terminar **baja el stack**, haya pasado o fallado: si algo falla, vuelca los
 últimos logs de los contenedores antes de limpiar. Para quedarte con el stack
 prendido, levantalo a mano con `docker compose up -d` y usá el script solo
 como verificación en un entorno desechable.
 
-Es el mismo test que corre el workflow `smoke.yml` en cada push a `main`.
+El workflow `smoke.yml` ejecuta el test en `main` y en los PRs.
+En el PR de integración `fix/durable-stack-and-e2e-20261104`, clona las
+ramas de corrección de los otros cuatro microservicios en lugar de `main`,
+para verificar la migración completa sin fusionar código.
 
-> **En Windows**, PowerShell/.NET no resuelven `*.pdf.localhost` aunque el
-> navegador sí: si el smoke falla con "no se puede resolver el nombre", agregá
-> los hosts a `C:\Windows\System32\drivers\etc\hosts` (como administrador):
->
-> ```text
-> 127.0.0.1 validation.pdf.localhost extraction.pdf.localhost persistence.pdf.localhost summary.pdf.localhost traefik.localhost
-> ```
->
-> El workflow hace ese mismo paso en el `/etc/hosts` del runner para no depender
-> del resolver de la distro.
+> **En Windows**, `*.pdf.localhost` puede no resolverse correctamente
+> desde PowerShell. El smoke usa `127.0.0.1` con la cabecera HTTP `Host`
+> original, de modo que Traefik reconoce cada servicio sin modificar
+> `C:\Windows\System32\drivers\etc\hosts` ni pedir permisos de administrador.
+> Para acceder con otras herramientas que no permiten elegir esa cabecera,
+> puede seguir siendo necesario configurar la resolución de nombres.
 
-> **Kafka y el smoke test:** el `up` levanta `kafka` y `kafka-init` (one-shot que
-> crea `documents.extracted`) y `extraction` publica el evento al extraer. El
-> smoke **no verifica el broker de forma directa**: si Kafka está caído,
-> `extraction` igual responde (`summary_status: "unavailable"`) y el
-> `POST /summary` explícito recalcula, así que el E2E puede pasar. Para saber si
-> el consumer está vivo, mirar `GET /health` de `summary`, que devuelve
-> `kafka: connected|disconnected` junto con el estado de Ollama.
+> **Kafka y el smoke test:** `kafka-init` crea `documents.extracted`.
+> El smoke espera `done` en Redis sin llamar a `GET/POST /summary`, por lo
+> que verifica el procesamiento disparado por el evento Kafka. No reemplaza
+> pruebas específicas de reinicio o pérdida de broker/volumen.
 
 ## Comandos útiles
 
@@ -236,7 +245,8 @@ sin puerto publicado al host. Corre en modo **KRaft single node**: broker y
 controller en el mismo proceso, sin ZooKeeper. El topic `documents.extracted`
 (particiones=1, replication=1) lo crea el one-shot `kafka-init` tras el health
 del broker, con `auto.create.topics.enable=false`: los topics se declaran
-explícitos, un typo en el nombre del productor no crea topics fantasma.
+explícitos. El volumen `kafka-data` conserva eventos y offsets entre
+recreaciones ordinarias, pero un único broker no es alta disponibilidad.
 
 Para inspeccionar topics: `docker compose exec kafka /opt/kafka/bin/kafka-topics.sh
 --bootstrap-server localhost:9092 --list`.
@@ -247,11 +257,11 @@ Cada servicio tiene `deploy.resources.limits` de memoria y CPU, para que un
 servicio que se coma la RAM no tumbe al resto. Ollama se lleva 6G porque cargar
 un modelo en RAM son gigas; el resto va entre 256M y 2G.
 
-Redis acota en dos niveles: el contenedor a **256 MB / 0.5 CPU** (bulkhead, como
-el resto) y adentro `--maxmemory 128mb --maxmemory-policy noeviction`. Es
-**efímero**: no tiene volumen, así que cada `down` lo deja vacío (la caché se
-reconstruye sola; si un dataset no entra en 128 MB, Redis falla explícito en
-los logs en vez de descartar entradas en silencio).
+Redis acota en dos niveles: el contenedor a **256 MB / 0.5 CPU** y
+`--maxmemory 128mb --maxmemory-policy noeviction`. Usa AOF (`appendfsync
+everysec`) y el volumen `redis-data`, conservado por `docker compose down`
+sin `-v`. Los trabajos tienen TTL según su estado, por lo que ni el volumen
+ni AOF reemplazan almacenamiento durable de largo plazo.
 
 Los logs usan el driver `json-file` con rotación de 10 MB × 3 por servicio (ancla
 `x-logging` en los tres compose). Traefik además tiene `accessLog` en JSON, con
@@ -268,8 +278,8 @@ traefik/certs/                # GITIGNORED: se regenera con el script
 mongodb/docker-compose.yml    # mongo, solo en la red interna de datos
 mongodb/.env-example          # plantilla de credenciales
 mongodb/data/                 # GITIGNORED: datos de mongo
-redis/docker-compose.yml      # redis (caché), efimero y sin puerto publicado
-kafka/docker-compose.yml      # kafka (broker KRaft single-node) + kafka-init (crea topics)
+redis/docker-compose.yml      # redis con AOF y volumen, sin puerto publicado
+kafka/docker-compose.yml      # Kafka KRaft single-node con volumen + kafka-init
 scripts/generate_certs.ps1    # regenera el par TLS
 scripts/rotate_mongo_credentials.ps1  # rota la password de Mongo del .env local
 scripts/smoke_test.ps1        # smoke test E2E

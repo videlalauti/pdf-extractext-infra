@@ -11,7 +11,8 @@ param(
     [string]$SummaryUrl = "http://summary.pdf.localhost",
     [string]$ExternalNetwork = "mired",
     [int]$HealthTimeoutSeconds = 180,
-    [int]$HealthRetrySeconds = 2
+    [int]$HealthRetrySeconds = 2,
+    [switch]$CheckRecovery
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +53,20 @@ function Invoke-ApiResponse {
         Uri = $Uri
         UseBasicParsing = $true
         TimeoutSec = $TimeoutSec
+    }
+    # En Windows, *.pdf.localhost no siempre se resuelve a IPv4.
+    # Traefik escucha en 127.0.0.1; conservar Host mantiene el router correcto
+    # sin tocar el archivo hosts ni requerir privilegios de administrador.
+    $target = [uri]$Uri
+    if ($target.Scheme -eq "http" -and
+        $target.Host.EndsWith(".pdf.localhost", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $params.Uri = "http://127.0.0.1$($target.PathAndQuery)"
+        $params.Headers = @{ Host = $target.Host }
+        # PowerShell 7 puede respetar HTTP_PROXY aun para dominios .localhost.
+        # NoProxy no existe en Windows PowerShell 5.1, por eso es condicional.
+        if ((Get-Command Invoke-WebRequest).Parameters.ContainsKey("NoProxy")) {
+            $params.NoProxy = $true
+        }
     }
     if ($BytesBody -ne $null) {
         $params.Body = $BytesBody
@@ -137,6 +152,7 @@ function Invoke-Docker {
 function Wait-ServiceHealth {
     param([string]$Name, [string]$BaseUrl)
     Write-Step "Esperando health de $Name en $BaseUrl/health ..."
+    $lastError = $null
     $deadline = (Get-Date).AddSeconds($HealthTimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         try {
@@ -147,10 +163,11 @@ function Wait-ServiceHealth {
             }
         }
         catch {
+            $lastError = $_.Exception.Message
         }
         Start-Sleep -Seconds $HealthRetrySeconds
     }
-    Fail "Timeout esperando health de $Name en $BaseUrl/health (limite $HealthTimeoutSeconds s)"
+    Fail "Timeout esperando health de $Name en $BaseUrl/health (limite $HealthTimeoutSeconds s). Ultimo error: $lastError"
 }
 
 function Invoke-DockerCapture {
@@ -167,6 +184,53 @@ function Invoke-DockerCapture {
         $ErrorActionPreference = $previous
     }
     return @{ Output = $output; ExitCode = $exitCode }
+}
+
+function Wait-KafkaJob {
+    param([string]$DocumentId, [int]$TimeoutSeconds = 300)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $job = $null
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 5
+        $read = Invoke-DockerCapture -DockerArgs @(
+            "exec", "redis", "redis-cli", "--raw", "GET", "summary:$DocumentId"
+        )
+        if ($read.ExitCode -ne 0) {
+            Fail "No se pudo leer el estado en Redis (exit $($read.ExitCode))"
+        }
+        $rawJob = ($read.Output -join "`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($rawJob)) {
+            continue
+        }
+        try {
+            $job = $rawJob | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            Fail "Redis devolvió un estado inválido para el resumen"
+        }
+        if ($job.status -eq "done") {
+            return $job
+        }
+        if ($job.status -eq "failed") {
+            Fail "Summary falló al procesar el evento: $($job.reason)"
+        }
+    }
+    Fail "Timeout: no se completó el job por Kafka en Redis ($TimeoutSeconds s)"
+}
+
+function Wait-ContainerHealthy {
+    param([string]$Name, [int]$TimeoutSeconds = 180)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $health = Invoke-DockerCapture -DockerArgs @(
+            "inspect", "--format", "{{.State.Health.Status}}", $Name
+        )
+        if ($health.ExitCode -eq 0 -and ($health.Output -join "").Trim() -eq "healthy") {
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    Fail "Timeout esperando contenedor $Name healthy ($TimeoutSeconds s)"
 }
 
 function Ensure-OllamaModel {
@@ -217,8 +281,10 @@ try {
     }
 
     Write-Step "Levantando el stack con $composePath"
-    Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "up", "-d")
+    # Compose puede dejar contenedores levantados incluso cuando up devuelve 1.
+    # Registrar el intento antes de ejecutar permite limpiar también ese caso.
     $stackStarted = $true
+    Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "up", "-d")
 
     Wait-ServiceHealth -Name "validation-service" -BaseUrl $ValidationUrl
     Wait-ServiceHealth -Name "extraction-service" -BaseUrl $ExtractionUrl
@@ -227,7 +293,16 @@ try {
 
     Ensure-OllamaModel
 
-    $pdfBytes = [System.IO.File]::ReadAllBytes($pdfPath)
+    # Cada ejecución usa un checksum único para evitar que un documento
+    # previamente resumido en Redis haga pasar una prueba sin consumir Kafka.
+    # Agregar un comentario después del EOF mantiene intactos los objetos PDF.
+    $originalBytes = [System.IO.File]::ReadAllBytes($pdfPath)
+    $markerBytes = [System.Text.Encoding]::ASCII.GetBytes(
+        "`n% smoke-run:" + [guid]::NewGuid().ToString("N") + "`n"
+    )
+    $pdfBytes = New-Object byte[] ($originalBytes.Length + $markerBytes.Length)
+    [System.Array]::Copy($originalBytes, 0, $pdfBytes, 0, $originalBytes.Length)
+    [System.Array]::Copy($markerBytes, 0, $pdfBytes, $originalBytes.Length, $markerBytes.Length)
     $pdfName = Split-Path -Leaf $pdfPath
 
     Write-Step "Enviando PDF a /validate"
@@ -239,18 +314,21 @@ try {
     }
     Write-Step "OK  /validate -> valid=$($validation.valid)"
 
-    Write-Step "Enviando PDF a /extract"
+    Write-Step "Enviando PDF a /upload (Validation -> Extraction -> Persistence -> Kafka)"
     $upload = New-MultipartBody -FileName $pdfName -FileBytes $pdfBytes
-    $extraction = Invoke-Api -Method POST -Uri "$ExtractionUrl/extract" `
+    $extraction = Invoke-Api -Method POST -Uri "$ExtractionUrl/upload" `
         -BytesBody $upload.Body -ContentType ("multipart/form-data; boundary=" + $upload.Boundary) `
         -TimeoutSec 60
     if ([string]::IsNullOrWhiteSpace($extraction.text)) {
-        Fail "/extract devolvio texto vacio"
+        Fail "/upload devolvio texto vacio"
     }
     if ([string]::IsNullOrWhiteSpace($extraction.id)) {
-        Fail "/extract no devolvio document id"
+        Fail "/upload no devolvio document id"
     }
-    Write-Step "OK  /extract -> id=$($extraction.id) text_len=$($extraction.text.Length)"
+    if ($extraction.summary_status -ne "queued") {
+        Fail "/upload no pudo publicar el evento Kafka: summary_status=$($extraction.summary_status)"
+    }
+    Write-Step "OK  /upload -> id=$($extraction.id) summary_status=$($extraction.summary_status)"
 
     $documentId = $extraction.id
 
@@ -259,42 +337,28 @@ try {
     if ($document.content -ne $extraction.text) {
         Fail "El contenido persistido no coincide con el texto extraido"
     }
-    $expectedChecksum = (Get-FileHash -LiteralPath $pdfPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $expectedChecksum = [System.BitConverter]::ToString(
+            $hasher.ComputeHash($pdfBytes)
+        ).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $hasher.Dispose()
+    }
     if ($document.checksum -ne $expectedChecksum) {
         Fail "El checksum no coincide (esperado $expectedChecksum, obtenido $($document.checksum))"
     }
     Write-Step "OK  /documents/$documentId -> content y checksum verificados"
 
-    Write-Step "Pidiendo resumen en /summary/$documentId"
-    $summaryCall = Invoke-ApiResponse -Method POST -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 300
-    $summary = $null
-    if ($summaryCall.StatusCode -eq 200) {
-        # Contrato sincronico: el resultado viene en la misma respuesta.
-        $summary = $summaryCall.Body
-    }
-    elseif ($summaryCall.StatusCode -eq 202) {
-        # Contrato async: el POST solo encola y el resultado se consulta con GET
-        # hasta que responde 200 (la inferencia real por CPU puede tardar ~4 min).
-        Write-Step "Resumen encolado (202); esperando el resultado por GET (max 300 s)"
-        $deadline = (Get-Date).AddSeconds(300)
-        while ((Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 5
-            $poll = Invoke-ApiResponse -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
-            if ($poll.StatusCode -eq 200) {
-                $summary = $poll.Body
-                break
-            }
-            if ($poll.StatusCode -ne 202 -and $poll.StatusCode -ne 409) {
-                Fail "/summary (GET) respondio $($poll.StatusCode)"
-            }
-        }
-        if ($null -eq $summary) {
-            Fail "Timeout esperando el resultado del resumen (300 s)"
-        }
-    }
-    else {
-        Fail "/summary (POST) respondio $($summaryCall.StatusCode)"
-    }
+    Write-Step "Esperando procesamiento Kafka en Redis (sin GET/POST /summary)"
+    # GET podría iniciar el procesamiento y ocultar un fallo del consumer.
+    $job = Wait-KafkaJob -DocumentId $documentId
+    Write-Step "OK  Kafka -> Summary -> Redis: status=$($job.status)"
+
+    # Leer el resultado desde la API únicamente después de demostrar que
+    # el evento disparó el procesamiento (sin recuperación por GET).
+    $summary = Invoke-Api -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
     if ([string]::IsNullOrWhiteSpace($summary.summary)) {
         Fail "/summary devolvio un resumen vacio"
     }
@@ -302,6 +366,72 @@ try {
         Fail "/summary devolvio document_id distinto al esperado"
     }
     Write-Step "OK  /summary -> document_id=$($summary.document_id) summary_len=$($summary.summary.Length)"
+
+    if ($CheckRecovery) {
+        Write-Step "Prueba de recuperación: reiniciando Redis y Kafka"
+        Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "restart", "redis", "kafka")
+        Wait-ContainerHealthy -Name "redis"
+        Wait-ContainerHealthy -Name "kafka"
+
+        # Redis debe recuperar el job terminado desde su volumen AOF.
+        $stored = Invoke-DockerCapture -DockerArgs @(
+            "exec", "redis", "redis-cli", "--raw", "GET", "summary:$documentId"
+        )
+        if ($stored.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace(($stored.Output -join "").Trim())) {
+            Fail "Redis perdió el job de resumen tras el reinicio"
+        }
+        # El estado es ASCII y se puede leer con redis-cli en cualquier
+        # sistema. El texto del resumen puede contener acentos: Windows
+        # PowerShell decodifica la salida nativa con otra página de códigos,
+        # por lo que compararlo aquí daría un falso negativo.
+        $restoredJob = ($stored.Output -join "`n") | ConvertFrom-Json
+        if ($restoredJob.status -ne "done") {
+            Fail "Redis no recuperó el estado terminal del job (estado=$($restoredJob.status))"
+        }
+        Write-Step "OK  Redis recupero el estado done desde AOF"
+
+        # El volumen de Kafka debe conservar al menos el topic declarado.
+        $topics = Invoke-DockerCapture -DockerArgs @(
+            "exec", "kafka", "/opt/kafka/bin/kafka-topics.sh",
+            "--bootstrap-server", "localhost:9092", "--list"
+        )
+        if ($topics.ExitCode -ne 0 -or "documents.extracted" -notin $topics.Output) {
+            Fail "Kafka no recuperó documents.extracted tras el reinicio"
+        }
+        Write-Step "OK  Kafka recupero el topic documents.extracted"
+
+        Wait-ServiceHealth -Name "summary-service" -BaseUrl $SummaryUrl
+
+        # Verificar el contenido recuperado mediante HTTP JSON UTF-8, no por
+        # stdout de docker exec: evita comparar cadenas con acentos corruptos
+        # por la codificación de la consola de Windows.
+        $restoredSummary = Invoke-Api -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
+        if ($restoredSummary.document_id -ne $documentId -or
+            $restoredSummary.summary -cne $summary.summary) {
+            Fail "El resumen recuperado por la API tras reiniciar Redis no coincide con el original"
+        }
+        Write-Step "OK  Redis recupero el contenido del resumen sin cambios"
+
+        # Una segunda carga obliga a usar el broker y consumer recuperados.
+        $secondMarker = [System.Text.Encoding]::ASCII.GetBytes(
+            "`n% smoke-recovery:" + [guid]::NewGuid().ToString("N") + "`n"
+        )
+        $secondPdf = New-Object byte[] ($originalBytes.Length + $secondMarker.Length)
+        [System.Array]::Copy($originalBytes, 0, $secondPdf, 0, $originalBytes.Length)
+        [System.Array]::Copy($secondMarker, 0, $secondPdf, $originalBytes.Length, $secondMarker.Length)
+        $secondUpload = New-MultipartBody -FileName $pdfName -FileBytes $secondPdf
+        $secondExtraction = Invoke-Api -Method POST -Uri "$ExtractionUrl/upload" `
+            -BytesBody $secondUpload.Body `
+            -ContentType ("multipart/form-data; boundary=" + $secondUpload.Boundary) `
+            -TimeoutSec 60
+        if ([string]::IsNullOrWhiteSpace($secondExtraction.id) -or
+            $secondExtraction.summary_status -ne "queued" -or
+            $secondExtraction.id -eq $documentId) {
+            Fail "Extraction no pudo publicar otro documento después de reiniciar Kafka"
+        }
+        $recoveredJob = Wait-KafkaJob -DocumentId $secondExtraction.id
+        Write-Step "OK  Kafka y Summary procesaron otro documento tras el reinicio"
+    }
 
     Write-Step "SMOKE TEST COMPLETO"
 }

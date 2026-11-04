@@ -20,9 +20,12 @@ services:
                     memory: 256M
         security_opt:
             - no-new-privileges:true
+        # Entorno local: accesible desde este equipo, no desde la LAN.
+        # Para un despliegue público hace falta TLS válido y autenticación
+        # antes de habilitar enlaces externos a Persistence.
         ports:
-            - 80:80
-            - 443:443
+            - "127.0.0.1:80:80"
+            - "127.0.0.1:443:443"
         volumes:
             - /var/run/docker.sock:/var/run/docker.sock:ro
             - ./config/traefik.yml:/etc/traefik/traefik.yml:ro
