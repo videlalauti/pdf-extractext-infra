@@ -22,11 +22,12 @@ services:
         # docker compose exec redis redis-cli ping
         expose:
             - "6379"
-        # Cache efimera: sin volumen, se pierde en cada `down` (YAGNI: no hay
-        # nada que persistir). noeviction en vez de una politica LRU para que
-        # un dataset que no entra en 128mb falle explicito y se vea en los
-        # logs, en vez de devolver miss silencioso por descartar entradas.
-        command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+        # Summary conserva aqui jobs y resultados. AOF y volumen permiten
+        # recuperar el estado tras reinicios; Redis sigue sin ser un archivo
+        # definitivo de resultados a largo plazo.
+        command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+        volumes:
+            - redis-data:/data
         healthcheck:
             test: ["CMD", "redis-cli", "ping"]
             interval: 10s
@@ -35,6 +36,9 @@ services:
             start_period: 10s
         networks:
             - mired
+
+volumes:
+    redis-data:
 
 networks:
     mired:
