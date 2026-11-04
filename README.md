@@ -171,20 +171,24 @@ error, es "seguí consultando con `GET`".
 .\scripts\smoke_test.ps1
 ```
 
-Levanta el stack, espera el health de los 4 servicios y recorre el flujo
-con `scripts/test.pdf`: valida, llama a `POST /upload` (orquestación real),
-verifica documento y checksum y exige `summary_status=queued`. Después hace
-poll a `GET /summary` cada 5 s hasta el `200` (máx. 300 s), sin llamar
-a `POST /summary`. El GET también puede recuperar trabajos faltantes, así que
-el smoke comprueba el resultado visible y la confirmación de publicación, pero
-no prueba por sí solo que Kafka sea el único disparador del resumen.
+Levanta el stack, espera el health de los cuatro servicios y recorre
+el flujo con `scripts/test.pdf`. Agrega un comentario único al PDF para que
+cada corrida tenga su propio checksum, lo valida y lo envía a `POST /upload`.
+Comprueba persistencia y publicación (`summary_status=queued`), y consulta
+cada 5 segundos el estado del job en Redis hasta `done` (máx. 300 s).
+**Recién después llama a `GET /summary`** para comprobar el resultado.
+Así, el GET no puede esconder un fallo del consumer de Kafka al reencolar un
+trabajo faltante. El archivo `scripts/test.pdf` original no se modifica.
 
 Al terminar **baja el stack**, haya pasado o fallado: si algo falla, vuelca los
 últimos logs de los contenedores antes de limpiar. Para quedarte con el stack
 prendido, levantalo a mano con `docker compose up -d` y usá el script solo
 como verificación en un entorno desechable.
 
-Es el mismo test que corre el workflow `smoke.yml` en cada push a `main`.
+El workflow `smoke.yml` ejecuta el test en `main` y en los PRs.
+En el PR de integración `fix/durable-stack-and-e2e-20261104`, clona las
+ramas de corrección de los otros cuatro microservicios en lugar de `main`,
+para verificar la migración completa sin fusionar código.
 
 > **En Windows**, `*.pdf.localhost` puede no resolverse correctamente
 > desde PowerShell. El smoke usa `127.0.0.1` con la cabecera HTTP `Host`
@@ -194,11 +198,9 @@ Es el mismo test que corre el workflow `smoke.yml` en cada push a `main`.
 > puede seguir siendo necesario configurar la resolución de nombres.
 
 > **Kafka y el smoke test:** `kafka-init` crea `documents.extracted`.
-> El smoke requiere `summary_status: "queued"` al subir un PDF y consulta
-> `GET /summary` hasta obtener el resultado. Como GET también puede recuperar
-> un trabajo pendiente, no demuestra por sí solo que el consumer realizó la
-> inferencia; para comprobar el consumo, inspeccionar el grupo de Kafka y sus
-> offsets. `GET /health` de Summary informa la conexión al broker.
+> El smoke espera `done` en Redis sin llamar a `GET/POST /summary`, por lo
+> que verifica el procesamiento disparado por el evento Kafka. No reemplaza
+> pruebas específicas de reinicio o pérdida de broker/volumen.
 
 ## Comandos útiles
 
