@@ -42,6 +42,9 @@ services:
             KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
             KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
             KAFKA_NUM_PARTITIONS: 1
+            # La ruta debe coincidir con el volumen: de otro modo se persiste
+            # un directorio vacío mientras Kafka escribe en /tmp.
+            KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
             # Los topics se declaran explicitamente (kafka-init): un typo en el
             # nombre del productor no debe crear topics fantasma.
             KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
@@ -52,7 +55,7 @@ services:
         # El topic sigue siendo de una sola réplica: esto no reemplaza backups
         # ni alta disponibilidad.
         volumes:
-            - kafka-data:/var/lib/kafka/data
+            - kafka-data:/tmp/kraft-combined-logs
         healthcheck:
             # --list no crea topics, asi que funciona con auto.create desactivado.
             test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
