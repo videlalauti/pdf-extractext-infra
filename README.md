@@ -66,6 +66,53 @@ docker compose ps
 Traefik levanta los servicios en cuanto cada contenedor está sano; la primera
 vez tarda porque hay que construir las 4 imágenes y descargar Mongo y Ollama.
 
+## Modos de ejecución
+
+Hay dos formas de correr el sistema y **no usan los mismos hosts**. Elegir mal
+es la causa más común de "no conecta".
+
+### Compose (recomendado)
+
+Todo el stack en Docker, detrás de Traefik. Los servicios **no publican puertos**:
+se entra solo por `http://<servicio>.pdf.localhost`. Es el modo que corren el
+smoke test y el CI, y el que se parece al despliegue.
+
+```powershell
+docker network create mired
+docker compose up --build -d
+```
+
+### Local con uvicorn (debug de un servicio)
+
+Para correr **un** servicio en el host con recarga automática contra los backing
+services de Docker:
+
+```powershell
+Copy-Item docker-compose.override.yml.example docker-compose.override.yml
+docker compose up -d mongo redis kafka ollama
+```
+
+Ese override publica `8001`–`8004` (servicios), `27017` (Mongo), `6379` (Redis),
+`9094` (Kafka) y `11434` (Ollama). `docker compose` lo carga solo; el archivo
+versionado es el `.example` para que un clone no abra puertos sin querer.
+
+Variables para el servicio que corrés a mano (desde la raíz de su repo):
+
+| Servicio | Variables de entorno |
+| --- | --- |
+| `validation` | `PORT=8001` |
+| `extraction` | `PORT=8002`, `PERSISTENCE_SERVICE_URL=http://localhost:8003`, `REDIS_URL=redis://localhost:6379`, `KAFKA_BOOTSTRAP_SERVERS=localhost:9094` |
+| `persistence` | `PORT=8003`, `MONGODB_HOST=localhost`, `MONGODB_PORT=27017`, `MONGODB_DATABASE_NAME=pdf_extractext`, `MONGODB_AUTH_SOURCE=admin`, y `MONGODB_ROOT_USERNAME` / `MONGODB_ROOT_PASSWORD` con los valores del `.env` de este repo |
+| `summary` | `PORT=8004`, `PERSISTENCE_SERVICE_URL=http://localhost:8003`, `REDIS_URL=redis://localhost:6379/0`, `KAFKA_BOOTSTRAP_SERVERS=localhost:9094`, `OLLAMA_URL=http://localhost:11434` |
+
+> **Kafka:** el host usa `localhost:9094`, no `9092`. El broker anuncia
+> `kafka:9092` para la red de Docker; publicar ese puerto no alcanza porque el
+> cliente recibiría metadata con un nombre que el host no resuelve. El listener
+> `EXTERNAL` en `9094` existe solo en el override.
+
+> El override es **solo para desarrollo**. En producción no se usa: el único
+> puerto abierto al host es el de Traefik (80/443).
+
 ## Probar cada servicio
 
 El único punto de entrada es Traefik: los 4 servicios **no publican puertos** en
@@ -81,6 +128,9 @@ el host.
 > la red interna de Docker: publicarlos saltearía el perímetro de Traefik. Para
 > inspeccionarlos: `docker compose exec mongo mongosh`,
 > `docker compose exec ollama ollama list` o `docker compose exec redis redis-cli ping`.
+
+> Para pegarle directo a un servicio (sin Traefik) hace falta el override de
+> desarrollo: ver [Modos de ejecución](#modos-de-ejecución).
 
 ## Smoke test
 
@@ -165,6 +215,7 @@ Los logs usan el driver `json-file` con rotación de 10 MB × 3 por servicio (an
 
 ```
 docker-compose.yml            # los 4 servicios + ollama; incluye traefik/, mongodb/, redis/ y kafka/
+docker-compose.override.yml.example  # puertos para debug local (copiar a docker-compose.override.yml)
 traefik/docker-compose.yml    # edge proxy (80/443), pineado por digest
 traefik/config/               # configuración estática, access log y dashboard
 traefik/certs/                # GITIGNORED: se regenera con el script
