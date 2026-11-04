@@ -239,18 +239,21 @@ try {
     }
     Write-Step "OK  /validate -> valid=$($validation.valid)"
 
-    Write-Step "Enviando PDF a /extract"
+    Write-Step "Enviando PDF a /upload (Validation -> Extraction -> Persistence -> Kafka)"
     $upload = New-MultipartBody -FileName $pdfName -FileBytes $pdfBytes
-    $extraction = Invoke-Api -Method POST -Uri "$ExtractionUrl/extract" `
+    $extraction = Invoke-Api -Method POST -Uri "$ExtractionUrl/upload" `
         -BytesBody $upload.Body -ContentType ("multipart/form-data; boundary=" + $upload.Boundary) `
         -TimeoutSec 60
     if ([string]::IsNullOrWhiteSpace($extraction.text)) {
-        Fail "/extract devolvio texto vacio"
+        Fail "/upload devolvio texto vacio"
     }
     if ([string]::IsNullOrWhiteSpace($extraction.id)) {
-        Fail "/extract no devolvio document id"
+        Fail "/upload no devolvio document id"
     }
-    Write-Step "OK  /extract -> id=$($extraction.id) text_len=$($extraction.text.Length)"
+    if ($extraction.summary_status -ne "queued") {
+        Fail "/upload no pudo publicar el evento Kafka: summary_status=$($extraction.summary_status)"
+    }
+    Write-Step "OK  /upload -> id=$($extraction.id) summary_status=$($extraction.summary_status)"
 
     $documentId = $extraction.id
 
@@ -265,35 +268,24 @@ try {
     }
     Write-Step "OK  /documents/$documentId -> content y checksum verificados"
 
-    Write-Step "Pidiendo resumen en /summary/$documentId"
-    $summaryCall = Invoke-ApiResponse -Method POST -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 300
+    Write-Step "Esperando resumen automatico por Kafka (sin llamar a POST /summary)"
+    # GET puede reencolar si falta Redis: este smoke comprueba el camino visible
+    # al cliente y exige que /upload haya confirmado su publicacion a Kafka.
     $summary = $null
-    if ($summaryCall.StatusCode -eq 200) {
-        # Contrato sincronico: el resultado viene en la misma respuesta.
-        $summary = $summaryCall.Body
-    }
-    elseif ($summaryCall.StatusCode -eq 202) {
-        # Contrato async: el POST solo encola y el resultado se consulta con GET
-        # hasta que responde 200 (la inferencia real por CPU puede tardar ~4 min).
-        Write-Step "Resumen encolado (202); esperando el resultado por GET (max 300 s)"
-        $deadline = (Get-Date).AddSeconds(300)
-        while ((Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 5
-            $poll = Invoke-ApiResponse -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
-            if ($poll.StatusCode -eq 200) {
-                $summary = $poll.Body
-                break
-            }
-            if ($poll.StatusCode -ne 202 -and $poll.StatusCode -ne 409) {
-                Fail "/summary (GET) respondio $($poll.StatusCode)"
-            }
+    $deadline = (Get-Date).AddSeconds(300)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 5
+        $poll = Invoke-ApiResponse -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
+        if ($poll.StatusCode -eq 200) {
+            $summary = $poll.Body
+            break
         }
-        if ($null -eq $summary) {
-            Fail "Timeout esperando el resultado del resumen (300 s)"
+        if ($poll.StatusCode -ne 202) {
+            Fail "/summary (GET) respondio $($poll.StatusCode); se esperaba 202 o 200"
         }
     }
-    else {
-        Fail "/summary (POST) respondio $($summaryCall.StatusCode)"
+    if ($null -eq $summary) {
+        Fail "Timeout esperando resumen automatico por Kafka (300 s)"
     }
     if ([string]::IsNullOrWhiteSpace($summary.summary)) {
         Fail "/summary devolvio un resumen vacio"
