@@ -11,7 +11,8 @@ param(
     [string]$SummaryUrl = "http://summary.pdf.localhost",
     [string]$ExternalNetwork = "mired",
     [int]$HealthTimeoutSeconds = 180,
-    [int]$HealthRetrySeconds = 2
+    [int]$HealthRetrySeconds = 2,
+    [switch]$CheckRecovery
 )
 
 $ErrorActionPreference = "Stop"
@@ -185,6 +186,53 @@ function Invoke-DockerCapture {
     return @{ Output = $output; ExitCode = $exitCode }
 }
 
+function Wait-KafkaJob {
+    param([string]$DocumentId, [int]$TimeoutSeconds = 300)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $job = $null
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 5
+        $read = Invoke-DockerCapture -DockerArgs @(
+            "exec", "redis", "redis-cli", "--raw", "GET", "summary:$DocumentId"
+        )
+        if ($read.ExitCode -ne 0) {
+            Fail "No se pudo leer el estado en Redis (exit $($read.ExitCode))"
+        }
+        $rawJob = ($read.Output -join "`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($rawJob)) {
+            continue
+        }
+        try {
+            $job = $rawJob | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            Fail "Redis devolvió un estado inválido para el resumen"
+        }
+        if ($job.status -eq "done") {
+            return $job
+        }
+        if ($job.status -eq "failed") {
+            Fail "Summary falló al procesar el evento: $($job.reason)"
+        }
+    }
+    Fail "Timeout: no se completó el job por Kafka en Redis ($TimeoutSeconds s)"
+}
+
+function Wait-ContainerHealthy {
+    param([string]$Name, [int]$TimeoutSeconds = 180)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $health = Invoke-DockerCapture -DockerArgs @(
+            "inspect", "--format", "{{.State.Health.Status}}", $Name
+        )
+        if ($health.ExitCode -eq 0 -and ($health.Output -join "").Trim() -eq "healthy") {
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    Fail "Timeout esperando contenedor $Name healthy ($TimeoutSeconds s)"
+}
+
 function Ensure-OllamaModel {
     param([string]$Model = $(if ($env:OLLAMA_MODEL) { $env:OLLAMA_MODEL } else { "llama3.2" }))
     # En CI el volumen de ollama nace vacio y el primer POST /summary falla con 503
@@ -304,40 +352,9 @@ try {
     Write-Step "OK  /documents/$documentId -> content y checksum verificados"
 
     Write-Step "Esperando procesamiento Kafka en Redis (sin GET/POST /summary)"
-    # No consultar Summary hasta que Redis registre 'done'. GET /summary
-    # también puede disparar un trabajo: usarlo durante el poll escondería
-    # un consumer de Kafka que no está funcionando.
-    $deadline = (Get-Date).AddSeconds(300)
-    $job = $null
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 5
-        $read = Invoke-DockerCapture -DockerArgs @(
-            "exec", "redis", "redis-cli", "--raw", "GET", "summary:$documentId"
-        )
-        if ($read.ExitCode -ne 0) {
-            Fail "No se pudo leer el estado en Redis (exit $($read.ExitCode))"
-        }
-        $rawJob = ($read.Output -join "`n").Trim()
-        if ([string]::IsNullOrWhiteSpace($rawJob)) {
-            continue
-        }
-        try {
-            $job = $rawJob | ConvertFrom-Json -ErrorAction Stop
-        }
-        catch {
-            Fail "Redis devolvió un estado inválido para el resumen"
-        }
-        if ($job.status -eq "done") {
-            break
-        }
-        if ($job.status -eq "failed") {
-            Fail "Summary falló al procesar el evento: $($job.reason)"
-        }
-    }
-    if ($null -eq $job -or $job.status -ne "done") {
-        Fail "Timeout: no se completó el job por Kafka en Redis (300 s)"
-    }
-    Write-Step "OK  Kafka -> Summary -> Redis: status=done"
+    # GET podría iniciar el procesamiento y ocultar un fallo del consumer.
+    $job = Wait-KafkaJob -DocumentId $documentId
+    Write-Step "OK  Kafka -> Summary -> Redis: status=$($job.status)"
 
     # Leer el resultado desde la API únicamente después de demostrar que
     # el evento disparó el procesamiento (sin recuperación por GET).
@@ -349,6 +366,58 @@ try {
         Fail "/summary devolvio document_id distinto al esperado"
     }
     Write-Step "OK  /summary -> document_id=$($summary.document_id) summary_len=$($summary.summary.Length)"
+
+    if ($CheckRecovery) {
+        Write-Step "Prueba de recuperación: reiniciando Redis y Kafka"
+        Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "restart", "redis", "kafka")
+        Wait-ContainerHealthy -Name "redis"
+        Wait-ContainerHealthy -Name "kafka"
+
+        # Redis debe recuperar el job terminado desde su volumen AOF.
+        $stored = Invoke-DockerCapture -DockerArgs @(
+            "exec", "redis", "redis-cli", "--raw", "GET", "summary:$documentId"
+        )
+        if ($stored.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace(($stored.Output -join "").Trim())) {
+            Fail "Redis perdió el job de resumen tras el reinicio"
+        }
+        $restoredJob = ($stored.Output -join "`n") | ConvertFrom-Json
+        if ($restoredJob.status -ne "done" -or $restoredJob.summary -ne $summary.summary) {
+            Fail "El resumen recuperado de Redis no coincide con el original"
+        }
+        Write-Step "OK  Redis recupero el resumen desde AOF"
+
+        # El volumen de Kafka debe conservar al menos el topic declarado.
+        $topics = Invoke-DockerCapture -DockerArgs @(
+            "exec", "kafka", "/opt/kafka/bin/kafka-topics.sh",
+            "--bootstrap-server", "localhost:9092", "--list"
+        )
+        if ($topics.ExitCode -ne 0 -or "documents.extracted" -notin $topics.Output) {
+            Fail "Kafka no recuperó documents.extracted tras el reinicio"
+        }
+        Write-Step "OK  Kafka recupero el topic documents.extracted"
+
+        Wait-ServiceHealth -Name "summary-service" -BaseUrl $SummaryUrl
+
+        # Una segunda carga obliga a usar el broker y consumer recuperados.
+        $secondMarker = [System.Text.Encoding]::ASCII.GetBytes(
+            "`n% smoke-recovery:" + [guid]::NewGuid().ToString("N") + "`n"
+        )
+        $secondPdf = New-Object byte[] ($originalBytes.Length + $secondMarker.Length)
+        [System.Array]::Copy($originalBytes, 0, $secondPdf, 0, $originalBytes.Length)
+        [System.Array]::Copy($secondMarker, 0, $secondPdf, $originalBytes.Length, $secondMarker.Length)
+        $secondUpload = New-MultipartBody -FileName $pdfName -FileBytes $secondPdf
+        $secondExtraction = Invoke-Api -Method POST -Uri "$ExtractionUrl/upload" `
+            -BytesBody $secondUpload.Body `
+            -ContentType ("multipart/form-data; boundary=" + $secondUpload.Boundary) `
+            -TimeoutSec 60
+        if ([string]::IsNullOrWhiteSpace($secondExtraction.id) -or
+            $secondExtraction.summary_status -ne "queued" -or
+            $secondExtraction.id -eq $documentId) {
+            Fail "Extraction no pudo publicar otro documento después de reiniciar Kafka"
+        }
+        $recoveredJob = Wait-KafkaJob -DocumentId $secondExtraction.id
+        Write-Step "OK  Kafka y Summary procesaron otro documento tras el reinicio"
+    }
 
     Write-Step "SMOKE TEST COMPLETO"
 }
