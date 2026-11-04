@@ -217,8 +217,10 @@ try {
     }
 
     Write-Step "Levantando el stack con $composePath"
-    Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "up", "-d")
+    # Compose puede dejar contenedores levantados incluso cuando up devuelve 1.
+    # Registrar el intento antes de ejecutar permite limpiar también ese caso.
     $stackStarted = $true
+    Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "up", "-d")
 
     Wait-ServiceHealth -Name "validation-service" -BaseUrl $ValidationUrl
     Wait-ServiceHealth -Name "extraction-service" -BaseUrl $ExtractionUrl
