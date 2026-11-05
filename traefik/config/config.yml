@@ -31,7 +31,7 @@ http:
       tls: {}
     # Diagnostico solo disponible dentro de mired por :8081. No expuesto.
     internal-api-diagnostics:
-      rule: "PathPrefix(`/api/http/routers`)"
+      rule: "PathPrefix(`/api/`)"
       service: api@internal
       entryPoints:
         - internal
