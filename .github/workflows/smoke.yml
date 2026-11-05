@@ -66,6 +66,10 @@ jobs:
             ) | Set-Content -LiteralPath .env
           '
 
+      # Consul requiere tokens UUID estables por instalacion; nunca se suben.
+      - name: Preparar tokens ACL y certificados desde Python
+        run: python3 scripts/dev.py prepare
+
       # traefik monta ./certs y el par no esta en git.
       - name: Generar certificados TLS
         run: pwsh -NoProfile -File ./scripts/generate_certs.ps1
