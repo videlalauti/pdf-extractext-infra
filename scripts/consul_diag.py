@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 CONSUL = os.environ.get("CONSUL_HTTP_ADDR", "http://consul:8500")
 TOKEN = os.environ.get("CONSUL_MANAGEMENT_TOKEN", "")
+PROXY_TOKEN = os.environ.get("CONSUL_TRAEFIK_TOKEN", "")
 SERVICES = ("validation-service", "extraction-service", "persistence-service", "summary-service")
 
 
@@ -33,10 +34,28 @@ def main():
             print(f"[DIAG]   habilitado para Traefik={('traefik.enable=true' in tags)}; tags={len(tags)}")
             status = [f"{check['CheckID']}:{check['Status']}" for check in items[0].get("Checks", [])]
             print(f"[DIAG]   checks={status}")
+    # Comprobar con EXACTAMENTE el token ACL de Traefik, no con el root.
+    proxy_visible = fetch(
+        CONSUL,
+        "/v1/health/service/validation-service?passing=true",
+        PROXY_TOKEN,
+    )
+    print(
+        "[DIAG] Token Traefik ve Validation passing=",
+        len(proxy_visible) if isinstance(proxy_visible, list) else "?",
+    )
     catalog = fetch("http://reverse-proxy:8081", "/api/http/routers")
     if not isinstance(catalog, list):
         print("[DIAG] Traefik API privada no accesible")
         raise SystemExit(2)
+    raw = fetch("http://reverse-proxy:8081", "/api/rawdata")
+    if isinstance(raw, dict):
+        print("[DIAG] Traefik rawdata claves:", sorted(raw.keys()))
+        for key in ("errors", "status"):
+            value = raw.get(key)
+            if value:
+                text = str(value)
+                print(f"[DIAG] Traefik {key}:", text[:1800])
     catalog_names = [router.get("name","") for router in catalog]
     names = [name for name in catalog_names if "@consulcatalog" in name]
     print(f"[DIAG] Routers desde Consul: {names}")
