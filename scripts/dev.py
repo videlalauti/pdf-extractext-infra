@@ -84,6 +84,34 @@ def ensure_network() -> None:
         run("docker", "network", "create", "mired")
 
 
+def ensure_consul_tokens(env_file: Path) -> None:
+    """Añade secretos ACL UUID solo si faltan; jamás los imprime o reemplaza."""
+    current = env_file.read_text(encoding="utf-8")
+    known = {
+        line.split("=", 1)[0].strip()
+        for line in current.splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+    missing = [
+        name for name in (
+            "CONSUL_MANAGEMENT_TOKEN",
+            "CONSUL_APP_TOKEN",
+            "CONSUL_TRAEFIK_TOKEN",
+        )
+        if name not in known
+    ]
+    if not missing:
+        return
+    import uuid as uuid_module
+    suffix = "" if current.endswith("\\n") else "\\n"
+    extra = "\\n".join(f"{name}={uuid_module.uuid4()}" for name in missing) + "\\n"
+    with env_file.open("a", encoding="utf-8") as out:
+        out.write(suffix + extra)
+    if os.name != "nt":
+        env_file.chmod(0o600)
+    print("[INFO] Tokens Consul ACL UUID creados en .env (no se muestran).")
+
+
 def ensure_configuration() -> None:
     env_file = ROOT / ".env"
     if not env_file.is_file():
@@ -94,6 +122,7 @@ def ensure_configuration() -> None:
     data = env_file.read_text(encoding="utf-8")
     if "REEMPLAZAR_POR_" in data:
         raise DemoError("El archivo .env aun contiene credenciales de ejemplo.")
+    ensure_consul_tokens(env_file)
     certs = ROOT / "traefik" / "certs"
     if all((certs / name).is_file() for name in ("cert.pem", "key.pem")):
         return
@@ -132,6 +161,7 @@ def urls(_: argparse.Namespace) -> None:
     for service, hostname in HOSTS.items():
         print(f"{service:12s} http://{hostname}/docs")
     print("Traefik      https://traefik.localhost/dashboard/")
+    print("Consul       http://127.0.0.1:8500/ui/ (ACL requiere token de lectura)")
     print("MongoDB      mongodb://127.0.0.1:27017/ (solo despues de compass-on)")
 
 
@@ -262,6 +292,9 @@ def build_parser() -> argparse.ArgumentParser:
     stop_cmd = sub.add_parser("stop", help="Detiene servicios sin borrar datos")
     stop_cmd.add_argument("--remove", action="store_true", help="Retira contenedores, conserva datos")
     stop_cmd.set_defaults(func=stop)
+    sub.add_parser("prepare", help="Prepara .env y certificados sin iniciar Docker").set_defaults(
+        func=lambda args: ensure_configuration()
+    )
     sub.add_parser("status", help="Muestra estado de contenedores").set_defaults(func=status)
     sub.add_parser("urls", help="Enlaces de Swagger").set_defaults(func=urls)
     sub.add_parser("compass-on", help="Abre Mongo solo en 127.0.0.1").set_defaults(func=compass_on)
