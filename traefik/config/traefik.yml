@@ -25,7 +25,10 @@ providers:
     exposedByDefault: false
     strictChecks:
       - passing
-    watch: true
+    # Los servicios arrancan DESPUES del proxy: forzar sondeo evita
+    # quedar con un Catalog vacio si el watch no notifica el registro.
+    watch: false
+    refreshInterval: 5s
 
 tls:
   certificates:
