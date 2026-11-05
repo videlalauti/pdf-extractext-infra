@@ -32,7 +32,7 @@ jobs:
         env:
           # El PR de migración comprueba las cuatro ramas propuestas en conjunto.
           # En main y en los demás PRs se sigue usando el código integrado.
-          INTEGRATION_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'fix/durable-stack-and-e2e-20261104' }}
+          INTEGRATION_PR: ${{ github.event_name == 'pull_request' && github.head_ref == 'feat/demo-automation-and-proxy-resilience-20261105' }}
         run: |
           set -euo pipefail
           for repo in validation extraction persistence summary; do
@@ -41,10 +41,10 @@ jobs:
               "../pdf-extractext-${repo}"
             if [[ "$INTEGRATION_PR" == "true" ]]; then
               case "$repo" in
-                validation) branch=fix/validate-config-limits-20261104 ;;
-                extraction) branch=fix/kafka-producer-recovery-20261104 ;;
-                persistence) branch=fix/startup-cleanup-20261104 ;;
-                summary) branch=fix/reliability-no-silent-kafka-loss-20261104 ;;
+                validation) branch=refactor/layered-validation-20261105 ;;
+                extraction) branch=refactor/layered-extraction-20261105 ;;
+                persistence) branch=refactor/layered-persistence-20261105 ;;
+                summary) branch=test/summary-readiness-and-demo-20261105 ;;
               esac
               git -C "../pdf-extractext-${repo}" fetch --depth 1 origin "$branch"
               git -C "../pdf-extractext-${repo}" checkout --detach FETCH_HEAD
