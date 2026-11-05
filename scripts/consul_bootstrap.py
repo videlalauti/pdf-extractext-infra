@@ -71,7 +71,7 @@ def ensure_token(name: str, secret: str, policy_id: str) -> None:
     try:
         existing = api("GET", f"/v1/acl/token/{accessor}")
     except RuntimeError as error:
-        if "HTTP 404" not in str(error):
+        if "HTTP 404" not in str(error) and "HTTP 403" not in str(error):
             raise
         api("PUT", "/v1/acl/token", body=payload)
         return
