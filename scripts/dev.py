@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import shutil
 import socket
 import subprocess
 import sys
@@ -98,11 +97,8 @@ def ensure_configuration() -> None:
     certs = ROOT / "traefik" / "certs"
     if all((certs / name).is_file() for name in ("cert.pem", "key.pem")):
         return
-    shell = shutil.which("pwsh") or shutil.which("powershell.exe") or shutil.which("powershell")
-    if shell is None:
-        raise DemoError("Faltan certificados TLS. Ejecuta scripts/generate_certs.ps1 en PowerShell.")
-    print("[INFO] Generando certificados TLS autofirmados")
-    run(shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "scripts" / "generate_certs.ps1"))
+    print("[INFO] Generando certificados TLS autofirmados con Python y OpenSSL")
+    run(sys.executable, str(ROOT / "scripts" / "certs.py"))
 
 
 def start(args: argparse.Namespace) -> None:
