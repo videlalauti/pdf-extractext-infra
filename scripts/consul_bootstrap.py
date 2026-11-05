@@ -12,8 +12,13 @@ from urllib.request import Request, urlopen
 
 BASE = os.environ.get("CONSUL_HTTP_ADDR", "http://consul:8500").rstrip("/")
 ADMIN = os.environ["CONSUL_MANAGEMENT_TOKEN"]
-APP = os.environ["CONSUL_APP_TOKEN"]
 TRAEFIK = os.environ["CONSUL_TRAEFIK_TOKEN"]
+APP_TOKENS = {
+    "validation-service": os.environ["CONSUL_VALIDATION_TOKEN"],
+    "extraction-service": os.environ["CONSUL_EXTRACTION_TOKEN"],
+    "persistence-service": os.environ["CONSUL_PERSISTENCE_TOKEN"],
+    "summary-service": os.environ["CONSUL_SUMMARY_TOKEN"],
+}
 
 SERVICES = ("validation-service", "extraction-service", "persistence-service", "summary-service")
 
@@ -89,20 +94,24 @@ def main() -> None:
                 raise
             time.sleep(2)
 
-    # App no es root: permiso explícito de registro y lectura de configuración.
-    app_rules = (
-        'node_prefix "" { policy = "read" }\n'
-        'service_prefix "" { policy = "write" }\n'
-        'key_prefix "pdf-extractext/" { policy = "read" }\n'
-    )
-    # Traefik SOLO consulta el catálogo. No puede registrar servicios ni escribir KV.
+    # Privilegios minimos: cada servicio registra SOLO su propio nombre,
+    # descubre otros mediante service:read y lee SOLO su KV.
+    for service in SERVICES:
+        rules = (
+            'node_prefix "" { policy = "read" }\\n'
+            'service_prefix "" { policy = "read" }\\n'
+            f'service "{service}" {{ policy = "write" }}\\n'
+            f'key "pdf-extractext/{service}/config" {{ policy = "read" }}\\n'
+        )
+        policy_id = policy(f"extractext-{service}", rules)
+        ensure_token(f"extractext-{service}", APP_TOKENS[service], policy_id)
+
+    # Traefik SOLO consulta el catálogo; no registra servicios ni escribe KV.
     traefik_rules = (
-        'node_prefix "" { policy = "read" }\n'
-        'service_prefix "" { policy = "read" }\n'
+        'node_prefix "" { policy = "read" }\\n'
+        'service_prefix "" { policy = "read" }\\n'
     )
-    app_id = policy("extractext-app-runtime", app_rules)
     traefik_id = policy("extractext-traefik-read", traefik_rules)
-    ensure_token("extractext-app-runtime", APP, app_id)
     ensure_token("extractext-traefik-read", TRAEFIK, traefik_id)
 
     # Configuración por servicio, NO existe un "config microservice".
