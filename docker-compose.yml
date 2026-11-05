@@ -42,6 +42,7 @@ services:
       <<: *traefik-labels
       traefik.http.routers.validation.rule: "Host(`validation.pdf.localhost`)"
       traefik.http.routers.validation.entrypoints: web
+      traefik.http.routers.validation.middlewares: http-breaker@file
       traefik.http.services.validation.loadbalancer.server.port: "8000"
     networks:
       - mired
@@ -54,23 +55,28 @@ services:
     deploy:
       resources: *recursos-app
     environment:
-      - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
+      - PERSISTENCE_SERVICE_URL=http://reverse-proxy:8081/persistence
       # Backing service por URL (12-Factor): intercambiable sin tocar codigo.
       - REDIS_URL=redis://redis:6379
       # El broker se resuelve por su nombre de servicio dentro de mired; con el
       # default localhost:9092 el publisher no conecta y el evento se pierde.
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # El HTTP interno pasa por Traefik, que controla el Circuit Breaker.
+      - VALIDATION_SERVICE_URL=http://reverse-proxy:8081/validation
     # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
     labels:
       <<: *traefik-labels
       traefik.http.routers.extraction.rule: "Host(`extraction.pdf.localhost`)"
       traefik.http.routers.extraction.entrypoints: web
+      traefik.http.routers.extraction.middlewares: http-breaker@file
       traefik.http.services.extraction.loadbalancer.server.port: "8000"
     networks:
       - mired
     # Sin esto extraction arranca antes de que persistence escuche y falla el
     # primer POST con connection refused.
     depends_on:
+      reverse-proxy:
+        condition: service_started
       persistence-service:
         condition: service_healthy
       redis:
@@ -106,6 +112,7 @@ services:
       <<: *traefik-labels
       traefik.http.routers.persistence.rule: "Host(`persistence.pdf.localhost`)"
       traefik.http.routers.persistence.entrypoints: web
+      traefik.http.routers.persistence.middlewares: http-breaker@file
       traefik.http.services.persistence.loadbalancer.server.port: "8000"
     networks:
       - mired
@@ -126,19 +133,22 @@ services:
           cpus: "1.5"
           memory: 1G
     environment:
-      - PERSISTENCE_SERVICE_URL=http://persistence-service:8000
-      - OLLAMA_URL=http://ollama:11434
+      - PERSISTENCE_SERVICE_URL=http://reverse-proxy:8081/persistence
+      - OLLAMA_URL=http://reverse-proxy:8081/ollama
       # Backing service por URL (12-Factor): aca vive el estado y el resultado
       # de los jobs de resumen, asi el servicio se reinicia sin perderlos.
       - REDIS_URL=redis://redis:6379
       # El broker se resuelve por su nombre de servicio dentro de mired; con el
       # default localhost:9092 el consumer no arranca y GET /summary queda en 202.
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # El HTTP interno pasa por Traefik, que controla el Circuit Breaker.
+      - VALIDATION_SERVICE_URL=http://reverse-proxy:8081/validation
     # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
     labels:
       <<: *traefik-labels
       traefik.http.routers.summary.rule: "Host(`summary.pdf.localhost`)"
       traefik.http.routers.summary.entrypoints: web
+      traefik.http.routers.summary.middlewares: http-breaker@file
       traefik.http.services.summary.loadbalancer.server.port: "8000"
     networks:
       - mired
