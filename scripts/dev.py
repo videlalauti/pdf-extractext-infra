@@ -103,8 +103,8 @@ def ensure_consul_tokens(env_file: Path) -> None:
     if not missing:
         return
     import uuid as uuid_module
-    suffix = "" if current.endswith("\\n") else "\\n"
-    extra = "\\n".join(f"{name}={uuid_module.uuid4()}" for name in missing) + "\\n"
+    suffix = "" if current.endswith("\n") else "\n"
+    extra = "\n".join(f"{name}={uuid_module.uuid4()}" for name in missing) + "\n"
     with env_file.open("a", encoding="utf-8") as out:
         out.write(suffix + extra)
     if os.name != "nt":
