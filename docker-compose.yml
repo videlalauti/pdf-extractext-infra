@@ -95,11 +95,11 @@ services:
       resources: *recursos-app
     # Las credenciales llegan por .env con los mismos nombres que usa mongo:
     # no hay defaults que puedan quedar desincronizados entre si.
-    env_file:
-      - ./.env
     environment:
       - CONSUL_HTTP_ADDR=http://consul:8500
       - CONSUL_APP_TOKEN=${CONSUL_PERSISTENCE_TOKEN:?ejecuta python scripts/dev.py start}
+      - MONGODB_ROOT_USERNAME=${MONGODB_ROOT_USERNAME:?}
+      - MONGODB_ROOT_PASSWORD=${MONGODB_ROOT_PASSWORD:?}
       - MONGODB_HOST=mongo
       - MONGODB_PORT=27017
       - MONGODB_DATABASE_NAME=pdf_extractext
