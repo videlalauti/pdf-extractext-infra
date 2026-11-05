@@ -98,18 +98,18 @@ def main() -> None:
     # descubre otros mediante service:read y lee SOLO su KV.
     for service in SERVICES:
         rules = (
-            'node_prefix "" { policy = "read" }\\n'
-            'service_prefix "" { policy = "read" }\\n'
-            f'service "{service}" {{ policy = "write" }}\\n'
-            f'key "pdf-extractext/{service}/config" {{ policy = "read" }}\\n'
+            'node_prefix "" { policy = "read" }\n'
+            'service_prefix "" { policy = "read" }\n'
+            f'service "{service}" {{ policy = "write" }}\n'
+            f'key "pdf-extractext/{service}/config" {{ policy = "read" }}\n'
         )
         policy_id = policy(f"extractext-{service}", rules)
         ensure_token(f"extractext-{service}", APP_TOKENS[service], policy_id)
 
     # Traefik SOLO consulta el catálogo; no registra servicios ni escribe KV.
     traefik_rules = (
-        'node_prefix "" { policy = "read" }\\n'
-        'service_prefix "" { policy = "read" }\\n'
+        'node_prefix "" { policy = "read" }\n'
+        'service_prefix "" { policy = "read" }\n'
     )
     traefik_id = policy("extractext-traefik-read", traefik_rules)
     ensure_token("extractext-traefik-read", TRAEFIK, traefik_id)
