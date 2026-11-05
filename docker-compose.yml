@@ -3,6 +3,7 @@ include:
   - mongodb/docker-compose.yml
   - redis/docker-compose.yml
   - kafka/docker-compose.yml
+  - consul/docker-compose.yml
 
 # Los anchors de YAML no cruzan archivos: cada compose (este, mongodb/, redis/,
 # kafka/ y traefik/) define su propia copia de esta ancla. Por eso el bloque se
@@ -20,30 +21,25 @@ x-recursos: &recursos-app
     cpus: "1.0"
     memory: 512M
 
-# Traefik exige que los labels de router y service lleven nombre: `..entrypoints`
-# sin nada en el medio se rechaza con "invalid element" y el provider no crea
-# ningun router. El anchor queda solo para lo que si es comun.
-x-traefik-labels: &traefik-labels
-  traefik.enable: "true"
-
 services:
   validation-service:
     build: ../pdf-extractext-validation
     container_name: validation-service
     restart: unless-stopped
     logging: *logging
+    environment:
+      - CONSUL_HTTP_ADDR=http://consul:8500
+      - CONSUL_APP_TOKEN=${CONSUL_APP_TOKEN:?ejecuta python scripts/dev.py start}
     deploy:
       resources: *recursos-app
     # Sin `ports`: el unico punto de entrada es Traefik por la red `mired`.
     # Para depurar sin proxy hay que publicar el puerto en un override local
     # (ver "Modos de ejecucion" en el README), nunca en este archivo.
+    # Consul consulta /health y registra el servicio en su Catalog.
     # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
-    labels:
-      <<: *traefik-labels
-      traefik.http.routers.validation.rule: "Host(`validation.pdf.localhost`)"
-      traefik.http.routers.validation.entrypoints: web
-      traefik.http.routers.validation.middlewares: http-breaker@file
-      traefik.http.services.validation.loadbalancer.server.port: "8000"
+    depends_on:
+      consul-init:
+        condition: service_completed_successfully
     networks:
       - mired
 
@@ -55,6 +51,8 @@ services:
     deploy:
       resources: *recursos-app
     environment:
+      - CONSUL_HTTP_ADDR=http://consul:8500
+      - CONSUL_APP_TOKEN=${CONSUL_APP_TOKEN:?ejecuta python scripts/dev.py start}
       - PERSISTENCE_SERVICE_URL=http://reverse-proxy:8081/persistence
       # Backing service por URL (12-Factor): intercambiable sin tocar codigo.
       - REDIS_URL=redis://redis:6379
@@ -63,18 +61,15 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       # El HTTP interno pasa por Traefik, que controla el Circuit Breaker.
       - VALIDATION_SERVICE_URL=http://reverse-proxy:8081/validation
+    # Consul consulta /health y registra el servicio en su Catalog.
     # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
-    labels:
-      <<: *traefik-labels
-      traefik.http.routers.extraction.rule: "Host(`extraction.pdf.localhost`)"
-      traefik.http.routers.extraction.entrypoints: web
-      traefik.http.routers.extraction.middlewares: http-breaker@file
-      traefik.http.services.extraction.loadbalancer.server.port: "8000"
     networks:
       - mired
     # Sin esto extraction arranca antes de que persistence escuche y falla el
     # primer POST con connection refused.
     depends_on:
+      consul-init:
+        condition: service_completed_successfully
       reverse-proxy:
         condition: service_started
       persistence-service:
@@ -103,22 +98,21 @@ services:
     env_file:
       - ./.env
     environment:
+      - CONSUL_HTTP_ADDR=http://consul:8500
+      - CONSUL_APP_TOKEN=${CONSUL_APP_TOKEN:?ejecuta python scripts/dev.py start}
       - MONGODB_HOST=mongo
       - MONGODB_PORT=27017
       - MONGODB_DATABASE_NAME=pdf_extractext
       - MONGODB_AUTH_SOURCE=admin
+    # Consul consulta /health y registra el servicio en su Catalog.
     # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
-    labels:
-      <<: *traefik-labels
-      traefik.http.routers.persistence.rule: "Host(`persistence.pdf.localhost`)"
-      traefik.http.routers.persistence.entrypoints: web
-      traefik.http.routers.persistence.middlewares: http-breaker@file
-      traefik.http.services.persistence.loadbalancer.server.port: "8000"
     networks:
       - mired
       # Puente con la red de datos. Es el unico servicio en las dos redes.
       - mongo_net_interna
     depends_on:
+      consul-init:
+        condition: service_completed_successfully
       mongo:
         condition: service_healthy
 
@@ -133,6 +127,8 @@ services:
           cpus: "1.5"
           memory: 1G
     environment:
+      - CONSUL_HTTP_ADDR=http://consul:8500
+      - CONSUL_APP_TOKEN=${CONSUL_APP_TOKEN:?ejecuta python scripts/dev.py start}
       - PERSISTENCE_SERVICE_URL=http://reverse-proxy:8081/persistence
       - OLLAMA_URL=http://reverse-proxy:8081/ollama
       # Backing service por URL (12-Factor): aca vive el estado y el resultado
@@ -141,18 +137,15 @@ services:
       # El broker se resuelve por su nombre de servicio dentro de mired; con el
       # default localhost:9092 el consumer no arranca y GET /summary queda en 202.
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    # Consul consulta /health y registra el servicio en su Catalog.
     # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
-    labels:
-      <<: *traefik-labels
-      traefik.http.routers.summary.rule: "Host(`summary.pdf.localhost`)"
-      traefik.http.routers.summary.entrypoints: web
-      traefik.http.routers.summary.middlewares: http-breaker@file
-      traefik.http.services.summary.loadbalancer.server.port: "8000"
     networks:
       - mired
     # ollama tarda en levantar el server; esperar a healthy evita que el primer
     # POST /summary muera con connection refused.
     depends_on:
+      consul-init:
+        condition: service_completed_successfully
       reverse-proxy:
         condition: service_started
       persistence-service:
