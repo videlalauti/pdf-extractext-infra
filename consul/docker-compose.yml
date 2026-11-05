@@ -1,0 +1,49 @@
+# Consul es obligatorio para el proyecto: Catalog, KV y ACL por token.
+# Se agrega a Docker Compose mediante "include: consul/docker-compose.yml".
+# El servicio consul-init aplica politicas y carga claves de configuracion.
+services:
+  consul:
+    image: hashicorp/consul:1.22.7
+    container_name: consul
+    restart: unless-stopped
+    command: ["agent", "-server", "-bootstrap-expect=1", "-node=extractext-consul", "-client=0.0.0.0", "-ui", "-data-dir=/consul/data"]
+    environment:
+      # El token se genera localmente como UUID desde scripts/dev.py.
+      CONSUL_MANAGEMENT_TOKEN: ${CONSUL_MANAGEMENT_TOKEN:?ejecuta python scripts/dev.py start}
+      CONSUL_LOCAL_CONFIG: >-
+        {"acl":{"enabled":true,"default_policy":"deny","enable_token_persistence":true,"tokens":{"initial_management":"${CONSUL_MANAGEMENT_TOKEN:?}"}}}
+    volumes:
+      - consul-data:/consul/data
+    # Solo para inspeccion local de la UI; nunca publicar en 0.0.0.0.
+    ports:
+      - "127.0.0.1:8500:8500"
+    healthcheck:
+      test: ["CMD-SHELL", "CONSUL_HTTP_TOKEN=$$CONSUL_MANAGEMENT_TOKEN consul operator raft list-peers >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    networks: [mired]
+
+  consul-init:
+    image: python:3.13-alpine
+    restart: "no"
+    volumes:
+      - ../scripts/consul_bootstrap.py:/bootstrap.py:ro
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+      CONSUL_MANAGEMENT_TOKEN: ${CONSUL_MANAGEMENT_TOKEN:?}
+      CONSUL_APP_TOKEN: ${CONSUL_APP_TOKEN:?}
+      CONSUL_TRAEFIK_TOKEN: ${CONSUL_TRAEFIK_TOKEN:?}
+    command: ["python", "/bootstrap.py"]
+    depends_on:
+      consul:
+        condition: service_healthy
+    networks: [mired]
+
+volumes:
+  consul-data:
+
+networks:
+  mired:
+    external: true
