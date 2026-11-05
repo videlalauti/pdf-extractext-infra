@@ -22,6 +22,8 @@ providers:
   consulCatalog:
     endpoint:
       address: consul:8500
+      # start.sh inyecta el UUID desde .env en un archivo privado, nunca en Git.
+      token: "__CONSUL_TRAEFIK_TOKEN__"
     exposedByDefault: false
     strictChecks:
       - passing
@@ -36,7 +38,7 @@ tls:
       keyFile: /etc/certs/key.pem
 
 log:
-  level: DEBUG
+  level: INFO
 
 # Access log: sin esto no hay forma de saber que pidio cada cliente ni cuanto
 # tardo. Se escribe a stdout y lo rota el driver json-file del compose.
