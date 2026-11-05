@@ -33,3 +33,8 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Overrides de desarrollo: solo locales; pueden exponer servicios
+mongo-compass.override.yml
+.mongo-compass.generated.yml
+docker-compose.override.yml
