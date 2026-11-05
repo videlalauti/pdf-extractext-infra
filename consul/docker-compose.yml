@@ -30,6 +30,7 @@ services:
     restart: "no"
     volumes:
       - ../scripts/consul_bootstrap.py:/bootstrap.py:ro
+      - ../scripts/consul_diag.py:/diagnose.py:ro
     environment:
       CONSUL_HTTP_ADDR: http://consul:8500
       CONSUL_MANAGEMENT_TOKEN: ${CONSUL_MANAGEMENT_TOKEN:?}
