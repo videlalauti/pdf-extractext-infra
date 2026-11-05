@@ -2,6 +2,9 @@ api:
   dashboard: true
   insecure: false
 
+ping:
+  entryPoint: internal
+
 entryPoints:
   web:
     address: ":80"
@@ -15,9 +18,14 @@ providers:
   file:
     filename: /etc/traefik/config.yml
     watch: true
-  docker:
+  # Rutas de microservicios descubiertas desde Consul, no desde Docker.
+  consulCatalog:
+    endpoint:
+      address: consul:8500
     exposedByDefault: false
-    network: mired
+    strictChecks:
+      - passing
+    watch: true
 
 tls:
   certificates:
