@@ -29,7 +29,7 @@ services:
     logging: *logging
     environment:
       - CONSUL_HTTP_ADDR=http://consul:8500
-      - CONSUL_APP_TOKEN=${CONSUL_APP_TOKEN:?ejecuta python scripts/dev.py start}
+      - CONSUL_APP_TOKEN=${CONSUL_VALIDATION_TOKEN:?ejecuta python scripts/dev.py start}
     deploy:
       resources: *recursos-app
     # Sin `ports`: el unico punto de entrada es Traefik por la red `mired`.
@@ -52,7 +52,7 @@ services:
       resources: *recursos-app
     environment:
       - CONSUL_HTTP_ADDR=http://consul:8500
-      - CONSUL_APP_TOKEN=${CONSUL_APP_TOKEN:?ejecuta python scripts/dev.py start}
+      - CONSUL_APP_TOKEN=${CONSUL_EXTRACTION_TOKEN:?ejecuta python scripts/dev.py start}
       - PERSISTENCE_SERVICE_URL=http://reverse-proxy:8081/persistence
       # Backing service por URL (12-Factor): intercambiable sin tocar codigo.
       - REDIS_URL=redis://redis:6379
@@ -99,7 +99,7 @@ services:
       - ./.env
     environment:
       - CONSUL_HTTP_ADDR=http://consul:8500
-      - CONSUL_APP_TOKEN=${CONSUL_APP_TOKEN:?ejecuta python scripts/dev.py start}
+      - CONSUL_APP_TOKEN=${CONSUL_PERSISTENCE_TOKEN:?ejecuta python scripts/dev.py start}
       - MONGODB_HOST=mongo
       - MONGODB_PORT=27017
       - MONGODB_DATABASE_NAME=pdf_extractext
@@ -128,7 +128,7 @@ services:
           memory: 1G
     environment:
       - CONSUL_HTTP_ADDR=http://consul:8500
-      - CONSUL_APP_TOKEN=${CONSUL_APP_TOKEN:?ejecuta python scripts/dev.py start}
+      - CONSUL_APP_TOKEN=${CONSUL_SUMMARY_TOKEN:?ejecuta python scripts/dev.py start}
       - PERSISTENCE_SERVICE_URL=http://reverse-proxy:8081/persistence
       - OLLAMA_URL=http://reverse-proxy:8081/ollama
       # Backing service por URL (12-Factor): aca vive el estado y el resultado
