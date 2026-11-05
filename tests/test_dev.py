@@ -103,5 +103,22 @@ class TestDemoCLI(unittest.TestCase):
                 self.assertEqual(dev.main(["upload", "--pdf", str(pdf)]), 1)
 
 
+class TestTraefikConsulACL(unittest.TestCase):
+    def test_acl_token_is_in_the_actual_static_config(self):
+        """Regression: TRAEFIK_* env is ignored if the static YAML exists."""
+        root = SCRIPT.parents[1]
+        template = (root / "traefik/config/traefik.yml").read_text(encoding="utf-8")
+        compose = (root / "traefik/docker-compose.yml").read_text(encoding="utf-8")
+        startup = (root / "traefik/start.sh").read_text(encoding="utf-8")
+        self.assertIn('token: "__CONSUL_TRAEFIK_TOKEN__"', template)
+        self.assertIn("CONSUL_TRAEFIK_TOKEN:", compose)
+        self.assertNotIn("TRAEFIK_PROVIDERS_CONSULCATALOG_ENDPOINT_TOKEN:", compose)
+        self.assertIn("traefik.template.yml", compose)
+        self.assertIn("/etc/traefik/start.sh", compose)
+        self.assertIn('exec traefik --configFile="$runtime"', startup)
+        self.assertIn("umask 077", startup)
+        self.assertIn("unset CONSUL_TRAEFIK_TOKEN", startup)
+
+
 if __name__ == "__main__":
     unittest.main()
