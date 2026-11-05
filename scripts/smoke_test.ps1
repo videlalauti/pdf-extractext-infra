@@ -286,6 +286,15 @@ try {
     $stackStarted = $true
     Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "up", "-d")
 
+    # Diagnosticar explícitamente Consul Catalog y los routers de Traefik.
+    # Evita esconder un 404 durante 180s si falla el descubrimiento.
+    Write-Step "Validando Consul Catalog y routers dinamicos de Traefik"
+    Start-Sleep -Seconds 15
+    Invoke-Docker -DockerArgs @(
+        "compose", "-f", $composePath, "run", "--rm", "--no-deps", "-T",
+        "consul-init", "python", "/diagnose.py"
+    )
+
     Wait-ServiceHealth -Name "validation-service" -BaseUrl $ValidationUrl
     Wait-ServiceHealth -Name "extraction-service" -BaseUrl $ExtractionUrl
     Wait-ServiceHealth -Name "persistence-service" -BaseUrl $PersistenceUrl
