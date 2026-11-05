@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 import os
 import time
 from urllib.error import HTTPError, URLError
@@ -52,19 +53,30 @@ def policy(name: str, rules: str) -> str:
 
 
 def ensure_token(name: str, secret: str, policy_id: str) -> None:
-    # Consulta mediante token de servicio: si existe, la llamada responde
-    # con datos o 403. Evitar recrear tokens en cada 'docker compose up'.
-    try:
-        api("GET", "/v1/acl/token/self", token=secret)
-        return
-    except (RuntimeError, URLError):
-        pass
-    api("PUT", "/v1/acl/token", body={
+    # AccessorID deterministico y SecretID aleatorio separado. Las peticiones
+    # de mantenimiento usan ADMIN, nunca el token de la app con ACL restringida.
+    accessor = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"pdf-extractext-{name}"))
+    payload = {
+        "AccessorID": accessor,
         "Description": name,
         "SecretID": secret,
         "Local": True,
         "Policies": [{"ID": policy_id}],
-    })
+    }
+    try:
+        existing = api("GET", f"/v1/acl/token/{accessor}")
+    except RuntimeError as error:
+        if "HTTP 404" not in str(error):
+            raise
+        api("PUT", "/v1/acl/token", body=payload)
+        return
+    # Seguridad: no modificar secret de una instalacion ya inicializada.
+    if existing.get("SecretID") != secret:
+        raise RuntimeError(
+            f"Consul {name} ya tiene otro SecretID; conserva .env original. "
+            "No regeneres tokens contra un volumen Consul persistente."
+        )
+    api("PUT", f"/v1/acl/token/{accessor}", body=payload)
 
 
 def main() -> None:
