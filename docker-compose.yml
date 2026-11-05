@@ -141,8 +141,6 @@ services:
       # El broker se resuelve por su nombre de servicio dentro de mired; con el
       # default localhost:9092 el consumer no arranca y GET /summary queda en 202.
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      # El HTTP interno pasa por Traefik, que controla el Circuit Breaker.
-      - VALIDATION_SERVICE_URL=http://reverse-proxy:8081/validation
     # El HEALTHCHECK lo aporta la imagen (Dockerfile): compose no lo duplica.
     labels:
       <<: *traefik-labels
@@ -155,6 +153,8 @@ services:
     # ollama tarda en levantar el server; esperar a healthy evita que el primer
     # POST /summary muera con connection refused.
     depends_on:
+      reverse-proxy:
+        condition: service_started
       persistence-service:
         condition: service_healthy
       ollama:
