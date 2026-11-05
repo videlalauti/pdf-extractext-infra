@@ -1,12 +1,15 @@
 api:
   dashboard: true
-  insecure: true
+  insecure: false
 
 entryPoints:
   web:
     address: ":80"
   websecure:
     address: ":443"
+  # Solo escucha dentro de Docker; NO se publica al host.
+  internal:
+    address: ":8081"
 
 providers:
   file:
