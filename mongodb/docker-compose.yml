@@ -27,8 +27,6 @@ services:
             # mired: la unica que llega es persistence-service, por el puente.
             - mongo_net_interna
         # Mismas variables que persistence-service: una sola fuente de verdad.
-        env_file:
-            - ../.env
         environment:
             - MONGO_INITDB_ROOT_USERNAME=${MONGODB_ROOT_USERNAME:?falta MONGODB_ROOT_USERNAME en .env de la raiz (copia mongodb/.env-example)}
             - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_ROOT_PASSWORD:?falta MONGODB_ROOT_PASSWORD en .env de la raiz (copia mongodb/.env-example)}

@@ -1,4 +1,27 @@
+# Provider File de Traefik: acceso al dashboard, rutas internas y Circuit Breaker.
+# Las rutas internas usan entrypoint internal (:8081), NO publicado en el host.
 http:
+  middlewares:
+    http-breaker:
+      circuitBreaker:
+        expression: "ResponseCodeRatio(500, 600, 0, 600) > 0.50 || NetworkErrorRatio() > 0.50"
+        checkPeriod: 10s
+        fallbackDuration: 30s
+        recoveryDuration: 10s
+        responseCode: 503
+    internal-validation-strip:
+      stripPrefix:
+        prefixes:
+          - "/validation"
+    internal-persistence-strip:
+      stripPrefix:
+        prefixes:
+          - "/persistence"
+    internal-ollama-strip:
+      stripPrefix:
+        prefixes:
+          - "/ollama"
+
   routers:
     traefik:
       rule: "Host(`traefik.localhost`)"
@@ -6,3 +29,47 @@ http:
       entryPoints:
         - websecure
       tls: {}
+    # Diagnostico solo disponible dentro de mired por :8081. No expuesto.
+    internal-api-diagnostics:
+      rule: "PathPrefix(`/api/`)"
+      service: api@internal
+      entryPoints:
+        - internal
+    internal-validation:
+      rule: "PathPrefix(`/validation`)"
+      service: internal-validation
+      entryPoints:
+        - internal
+      middlewares:
+        - internal-validation-strip
+        - http-breaker
+    internal-persistence:
+      rule: "PathPrefix(`/persistence`)"
+      service: internal-persistence
+      entryPoints:
+        - internal
+      middlewares:
+        - internal-persistence-strip
+        - http-breaker
+    internal-ollama:
+      rule: "PathPrefix(`/ollama`)"
+      service: internal-ollama
+      entryPoints:
+        - internal
+      middlewares:
+        - internal-ollama-strip
+        - http-breaker
+
+  services:
+    internal-validation:
+      loadBalancer:
+        servers:
+          - url: "http://validation-service:8000"
+    internal-persistence:
+      loadBalancer:
+        servers:
+          - url: "http://persistence-service:8000"
+    internal-ollama:
+      loadBalancer:
+        servers:
+          - url: "http://ollama:11434"

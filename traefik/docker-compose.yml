@@ -26,9 +26,17 @@ services:
         ports:
             - "127.0.0.1:80:80"
             - "127.0.0.1:443:443"
+        # El token NO se establece con TRAEFIK_*: Traefik ignora esas variables
+        # cuando existe configuracion estatica en un archivo YAML.
+        environment:
+            CONSUL_TRAEFIK_TOKEN: ${CONSUL_TRAEFIK_TOKEN:?ejecuta python scripts/dev.py start}
+        entrypoint: ["/bin/sh", "/etc/traefik/start.sh"]
+        depends_on:
+            consul-init:
+                condition: service_completed_successfully
         volumes:
-            - /var/run/docker.sock:/var/run/docker.sock:ro
-            - ./config/traefik.yml:/etc/traefik/traefik.yml:ro
+            - ./config/traefik.yml:/etc/traefik/traefik.template.yml:ro
+            - ./start.sh:/etc/traefik/start.sh:ro
             - ./config/config.yml:/etc/traefik/config.yml:ro
             - ./certs:/etc/certs:ro
         networks:

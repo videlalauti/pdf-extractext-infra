@@ -286,6 +286,15 @@ try {
     $stackStarted = $true
     Invoke-Docker -DockerArgs @("compose", "-f", $composePath, "up", "-d")
 
+    # Diagnosticar explícitamente Consul Catalog y los routers de Traefik.
+    # Evita esconder un 404 durante 180s si falla el descubrimiento.
+    Write-Step "Validando Consul Catalog y routers dinamicos de Traefik"
+    Start-Sleep -Seconds 15
+    Invoke-Docker -DockerArgs @(
+        "compose", "-f", $composePath, "run", "--rm", "--no-deps", "-T",
+        "consul-init", "python", "/diagnose.py"
+    )
+
     Wait-ServiceHealth -Name "validation-service" -BaseUrl $ValidationUrl
     Wait-ServiceHealth -Name "extraction-service" -BaseUrl $ExtractionUrl
     Wait-ServiceHealth -Name "persistence-service" -BaseUrl $PersistenceUrl
@@ -405,7 +414,25 @@ try {
         # Verificar el contenido recuperado mediante HTTP JSON UTF-8, no por
         # stdout de docker exec: evita comparar cadenas con acentos corruptos
         # por la codificación de la consola de Windows.
-        $restoredSummary = Invoke-Api -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
+        # Traefik puede conservar el circuito OPEN durante fallbackDuration
+        # tras errores 503 de Kafka/Redis. No se acepta falso 200: esperar a que
+        # cierre el circuito y comparar el contenido recuperado de verdad.
+        $restoredSummary = $null
+        $breakerDeadline = (Get-Date).AddSeconds(90)
+        while ((Get-Date) -lt $breakerDeadline) {
+            $result = Invoke-ApiResponse -Method GET -Uri "$SummaryUrl/summary/$documentId" -TimeoutSec 30
+            if ($result.StatusCode -eq 200) {
+                $restoredSummary = $result.Body
+                break
+            }
+            if ($result.StatusCode -ne 503) {
+                Fail "GET /summary tras reinicio dio HTTP $($result.StatusCode), se esperaba 200 o 503 transitorio"
+            }
+            Start-Sleep -Seconds 3
+        }
+        if ($null -eq $restoredSummary) {
+            Fail "Traefik no recuperó GET /summary tras 90s de circuit breaker"
+        }
         if ($restoredSummary.document_id -ne $documentId -or
             $restoredSummary.summary -cne $summary.summary) {
             Fail "El resumen recuperado por la API tras reiniciar Redis no coincide con el original"

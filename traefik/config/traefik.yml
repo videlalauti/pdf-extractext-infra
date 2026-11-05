@@ -1,20 +1,36 @@
 api:
   dashboard: true
-  insecure: true
+  insecure: false
+
+ping:
+  entryPoint: internal
 
 entryPoints:
   web:
     address: ":80"
   websecure:
     address: ":443"
+  # Solo escucha dentro de Docker; NO se publica al host.
+  internal:
+    address: ":8081"
 
 providers:
   file:
     filename: /etc/traefik/config.yml
     watch: true
-  docker:
+  # Rutas de microservicios descubiertas desde Consul, no desde Docker.
+  consulCatalog:
+    endpoint:
+      address: consul:8500
+      # start.sh inyecta el UUID desde .env en un archivo privado, nunca en Git.
+      token: "__CONSUL_TRAEFIK_TOKEN__"
     exposedByDefault: false
-    network: mired
+    strictChecks:
+      - passing
+    # Los servicios arrancan DESPUES del proxy: forzar sondeo evita
+    # quedar con un Catalog vacio si el watch no notifica el registro.
+    watch: false
+    refreshInterval: 5s
 
 tls:
   certificates:
