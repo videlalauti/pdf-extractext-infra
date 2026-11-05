@@ -25,5 +25,8 @@ jobs:
         run: |
           printf 'MONGODB_ROOT_USERNAME=validate_ci\nMONGODB_ROOT_PASSWORD=ArturiaPendragon1260!\n' > .env
 
+      - name: Probar scripts Python sin Docker real
+        run: python3 -m unittest discover -s tests -v
+
       - name: Validar docker-compose.yml
         run: docker compose -f docker-compose.yml config --quiet
