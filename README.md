@@ -301,3 +301,71 @@ El dominio compartido entre servicios ya no vive acá: se instala desde
   verdad por servicio.
 - La llave TLS que estuvo commiteada en el historial fue purgada; si clonaste
   este repo antes, borrá el directorio local y cloná de nuevo.
+
+
+## Demo automatizada con Python (defensa)
+
+Desde **pdf-extractext-infra** (Python 3, Docker Desktop y OpenSSL/Git for Windows):
+
+```powershell
+python scripts/dev.py start                # configura red mired y levanta TODO el stack
+python scripts/dev.py start --build        # fuerza rebuild cuando cambian Dockerfiles
+python scripts/dev.py status               # estado y health de los contenedores
+python scripts/dev.py urls                 # muestra los cuatro Swagger
+python scripts/dev.py compass-on           # puerto 27017 SOLO en 127.0.0.1
+python scripts/dev.py upload --unique      # sube test.pdf por /upload y verifica /documents/{id}
+python scripts/dev.py upload --pdf C:\\docs\\demo.pdf --unique --wait-summary
+python scripts/dev.py compass-off          # cierra el puerto de Mongo en Windows
+python scripts/dev.py stop                 # detiene contenedores sin borrar datos
+python scripts/dev.py stop --remove        # docker compose down, sin -v
+```
+
+**Compass:** despues de `compass-on`, conectar a `mongodb://127.0.0.1:27017/`
+con Username/Password del archivo `.env` de Infra y **Authentication Database = admin**.
+Entrar a `pdf_extractext → documents → Documents`, pegar el filtro `{"_id": "ID"}`
+que imprime `upload`. En la pestaña `Schema`, ejecutar `Analyze Schema`; en
+`Indexes` ver el indice unico de `checksum`.
+
+`compass-on` genera `.mongo-compass.generated.yml`, agrega temporalmente una red
+Docker no interna SOLO a Mongo y lo recrea sin borrar `mongodb/data`. Esto es
+necesario porque `mongo_net_interna` bloquea la publicación en Windows.
+`compass-off` recrea Mongo únicamente con la red interna original, elimina el
+override generado y preserva los datos. Nunca subir `.env`, certificados,
+archivos override ni credenciales a GitHub.
+
+La prueba `upload` consulta realmente el microservicio Extraction via Traefik y,
+con el `id`, consulta a Persistence via Traefik y **compara** texto y checksum.
+No inventa un `200 OK`, pero no reemplaza a `smoke_test.ps1 -CheckRecovery`
+para verificar el consumer de Kafka (se puede usar `--wait-summary`).
+
+### Circuit Breaker HTTP centralizado en Traefik
+
+Traefik (provider File) define `http-breaker` para todas las rutas publicas y
+para un entrypoint **interno** (`:8081`), disponible solo en la red Docker `mired`:
+
+- `http://reverse-proxy:8081/validation` → Validation;
+- `http://reverse-proxy:8081/persistence` → Persistence;
+- `http://reverse-proxy:8081/ollama` → Ollama.
+
+`StripPrefix` retira los prefijos antes de reenviar la request. Extraction y Summary
+usan estas URLs via variables de entorno del Compose: sus solicitudes HTTP ya pasan
+por Traefik. El Circuit Breaker abre con ratio de 5xx o errores de red superior
+al 50 %, evalua cada 10s, responde 503 mientras esta abierto, espera 30s y entra
+en recuperación durante 10s. **No protege Kafka, Redis ni MongoDB**, que no
+pasan por Traefik HTTP. Extraction conserva además su breaker Python de Shared:
+es defensa adicional, no el breaker del proxy.
+
+El puerto `:8081` es exclusivamente interno (NO aparece en `ports:`).
+`api.insecure: false` evita la API insegura adicional del dashboard.
+Para ver el dashboard disponible localmente:
+`https://traefik.localhost/dashboard/` (TLS autofirmado).
+
+### Tests de estos scripts
+
+```powershell
+python -m unittest discover -s tests -v
+docker compose config --quiet
+```
+
+El E2E completo necesita Docker y un modelo Ollama preparado:
+`./scripts/smoke_test.ps1 -CheckRecovery` en PowerShell.
