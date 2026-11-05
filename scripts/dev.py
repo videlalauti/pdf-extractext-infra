@@ -95,8 +95,11 @@ def ensure_consul_tokens(env_file: Path) -> None:
     missing = [
         name for name in (
             "CONSUL_MANAGEMENT_TOKEN",
-            "CONSUL_APP_TOKEN",
             "CONSUL_TRAEFIK_TOKEN",
+            "CONSUL_VALIDATION_TOKEN",
+            "CONSUL_EXTRACTION_TOKEN",
+            "CONSUL_PERSISTENCE_TOKEN",
+            "CONSUL_SUMMARY_TOKEN",
         )
         if name not in known
     ]
